@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Settle Up - Smart Expense & Debt Simplifier</title>
+  <meta name="description" content="Greedy Minimum Cash-Flow algorithm group expense tracker, bill splitter, UPI settlement, and room sharing.">
+  <link rel="stylesheet" href="./src/css/styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💸</text></svg>">
+</head>
+<body>
+
+  <!-- Main Application Container -->
+  <div class="app-container">
+
+    <!-- Top Sticky Header -->
+    <header class="app-header">
+      <div class="brand-section">
+        <div class="brand-logo-badge">⚡</div>
+        <div class="brand-info">
+          <h1 id="room-name-display" class="text-gradient">Goa Beach Vacation 2026 🌴</h1>
+          <p>Greedy Minimum Cash-Flow Debt Optimizer</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <!-- Room ID Badge & Copy -->
+        <button id="room-id-badge" class="room-badge" onclick="window.app.copyRoomLink()" title="Click to copy invite link">
+          <span>🔑</span>
+          <span>GOA2026</span>
+        </button>
+
+        <!-- Share Room QR Modal Trigger -->
+        <button class="btn btn-secondary btn-icon" onclick="window.app.openShareRoomModal()" title="Share Room via QR Code">
+          📱
+        </button>
+
+        <!-- Currency Selector -->
+        <select id="currency-select" class="select-input" style="font-weight: 600;">
+          <option value="USD">💵 USD ($)</option>
+          <option value="INR">₹ INR (₹)</option>
+          <option value="EUR">💶 EUR (€)</option>
+          <option value="GBP">💷 GBP (£)</option>
+          <option value="JPY">💴 JPY (¥)</option>
+          <option value="CAD">🍁 CAD (CA$)</option>
+          <option value="AUD">🦘 AUD (A$)</option>
+          <option value="AED">🇦🇪 AED (د.إ)</option>
+        </select>
+
+        <!-- Load Sample Room Button -->
+        <button class="btn btn-secondary btn-sm" onclick="window.app.loadSamplePreset()" title="Load 5-person sample vacation trip">
+          🔄 Sample Trip
+        </button>
+
+        <!-- Room Switcher / Create -->
+        <button class="btn btn-secondary btn-sm" onclick="window.app.openCreateRoomModal()" title="Switch or Create Room">
+          🏠 Rooms
+        </button>
+
+        <!-- Add Expense Primary Action -->
+        <button class="btn btn-primary" onclick="window.app.openAddExpenseModal()">
+          <span>➕</span>
+          <span>Add Expense</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Room Members Strip -->
+    <section class="glass-card members-bar">
+      <div class="members-header">
+        <div class="members-title">
+          <span>👥</span>
+          <span>Trip Members & Net Balances</span>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="window.app.openAddMemberModal()">
+          <span>➕ Add Friend</span>
+        </button>
+      </div>
+      <div id="members-list" class="members-list">
+        <!-- Injected via JavaScript -->
+      </div>
+    </section>
+
+    <!-- Navigation Tabs -->
+    <nav class="app-tabs">
+      <button class="tab-btn active" data-tab="simplifier">
+        <span>⚡</span>
+        <span>Simplified Debts (Greedy)</span>
+      </button>
+      <button class="tab-btn" data-tab="expenses">
+        <span>📝</span>
+        <span>All Expenses</span>
+      </button>
+      <button class="tab-btn" data-tab="analytics">
+        <span>📊</span>
+        <span>Spending Analytics</span>
+      </button>
+      <button class="tab-btn" data-tab="settlements">
+        <span>📜</span>
+        <span>Settlements & Receipts</span>
+      </button>
+    </nav>
+
+    <!-- TAB 1: Greedy Debt Simplifier -->
+    <main id="tab-view-simplifier" class="simplifier-section">
+      <!-- Stats Overview Banner -->
+      <div class="stats-banner">
+        <div class="glass-card stat-card stat-indigo">
+          <div class="stat-icon">💳</div>
+          <div class="stat-content">
+            <span class="stat-label">TOTAL GROUP SPEND</span>
+            <span id="stat-total-expense" class="stat-value">$0.00</span>
+            <span class="stat-subtext">Across all logged items</span>
+          </div>
+        </div>
+
+        <div class="glass-card stat-card stat-amber">
+          <div class="stat-icon">⚖️</div>
+          <div class="stat-content">
+            <span class="stat-label">REMAINING DEBT BALANCE</span>
+            <span id="stat-remaining-debt" class="stat-value">$0.00</span>
+            <span class="stat-subtext">Unsettled amount</span>
+          </div>
+        </div>
+
+        <div class="glass-card stat-card stat-emerald">
+          <div class="stat-icon">⚡</div>
+          <div class="stat-content">
+            <span class="stat-label">OPTIMAL TRANSFERS</span>
+            <span id="stat-transfers-count" class="stat-value">0 Transfers</span>
+            <span class="stat-subtext">Greedy O(N log N) simplified</span>
+          </div>
+        </div>
+
+        <div class="glass-card stat-card stat-pink">
+          <div class="stat-icon">🤝</div>
+          <div class="stat-content">
+            <span class="stat-label">TOTAL SETTLED</span>
+            <span id="stat-total-settled" class="stat-value">$0.00</span>
+            <span class="stat-subtext">Paid via UPI & Cash</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Optimization Pill Banner -->
+      <div id="optimization-pill-container" class="optimization-pill">
+        <!-- Injected via JavaScript -->
+      </div>
+
+      <!-- Simplified Debt Cards Grid -->
+      <div id="debts-cards-grid" class="debts-grid">
+        <!-- Injected via JavaScript -->
+      </div>
+
+      <!-- Algorithm Interactive Explainer & Step Trace -->
+      <section class="glass-card math-accordion">
+        <div class="accordion-header">
+          <div class="accordion-title">
+            <span>🧠</span>
+            <span>How the Greedy Minimum Cash-Flow Algorithm Works</span>
+          </div>
+          <span style="font-size: 0.8rem; color: var(--text-muted);">O(N log N) Mathematical Proof</span>
+        </div>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.75rem; line-height: 1.5;">
+          Instead of settling dozens of circular bilateral debts (e.g. Alice paying Bob, Bob paying Charlie, Charlie paying Alice), the algorithm nets each person's total paid vs consumed share into a single balance. It then greedily matches the person with the <strong>largest negative balance (maximum debtor)</strong> with the person with the <strong>largest positive balance (maximum creditor)</strong> until all balances reach exact zero.
+        </p>
+
+        <div style="overflow-x: auto;">
+          <table class="step-trace-table">
+            <thead>
+              <tr>
+                <th>Step</th>
+                <th>Debtor (Payer)</th>
+                <th>Creditor (Receiver)</th>
+                <th>Transfer Amount</th>
+                <th>Optimization Step Action</th>
+              </tr>
+            </thead>
+            <tbody id="algorithm-step-trace">
+              <!-- Injected via JavaScript -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- TAB 2: Expenses Feed -->
+    <main id="tab-view-expenses" class="expenses-container" style="display: none;">
+      <div class="glass-card filters-bar">
+        <div class="search-box">
+          <span>🔍</span>
+          <input type="text" id="expense-search-input" placeholder="Search by expense description or member name...">
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+          <select id="expense-category-filter" class="select-input">
+            <option value="all">All Categories</option>
+            <option value="food">🍕 Food & Drinks</option>
+            <option value="transport">🚗 Transport & Fuel</option>
+            <option value="lodging">🏨 Stay & Villa</option>
+            <option value="activities">🍿 Fun & Activities</option>
+            <option value="groceries">🛒 Groceries & Supplies</option>
+            <option value="utilities">💡 Bills & Utilities</option>
+            <option value="shopping">🛍️ Shopping & Gear</option>
+            <option value="general">🏷️ General / Other</option>
+          </select>
+          <button class="btn btn-primary" onclick="window.app.openAddExpenseModal()">
+            ➕ Add Expense
+          </button>
+        </div>
+      </div>
+
+      <div id="expenses-list-container" style="display: flex; flex-direction: column; gap: 0.75rem;">
+        <!-- Injected via JavaScript -->
+      </div>
+    </main>
+
+    <!-- TAB 3: Visual Analytics -->
+    <main id="tab-view-analytics" style="display: none;">
+      <div class="analytics-grid">
+        <!-- Category Spending Distribution -->
+        <div class="glass-card analytics-card">
+          <div class="analytics-title">
+            <span>📊</span>
+            <span>Category Spending Distribution</span>
+          </div>
+          <div id="analytics-category-breakdown">
+            <!-- Injected via JavaScript -->
+          </div>
+        </div>
+
+        <!-- Member Spending & Net Matrix -->
+        <div class="glass-card analytics-card">
+          <div class="analytics-title">
+            <span>👥</span>
+            <span>Member Expense Matrix</span>
+          </div>
+          <div id="analytics-member-matrix">
+            <!-- Injected via JavaScript -->
+          </div>
+        </div>
+
+        <!-- Highlights & Insights -->
+        <div class="glass-card analytics-card" style="grid-column: 1 / -1;">
+          <div class="analytics-title">
+            <span>💡</span>
+            <span>Room Insights & Spending Highlights</span>
+          </div>
+          <div id="analytics-insights" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem;">
+            <!-- Injected via JavaScript -->
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- TAB 4: Settlement Audit Log & Receipts -->
+    <main id="tab-view-settlements" style="display: none;">
+      <!-- Settlement Filter Bar -->
+      <div class="glass-card filters-bar" style="margin-bottom: 1.25rem;">
+        <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+          <button class="btn btn-secondary btn-sm settlement-filter-btn active" data-filter="all" onclick="window.app.filterSettlements('all')">
+            <span>📋 All Records</span>
+          </button>
+          <button class="btn btn-secondary btn-sm settlement-filter-btn" data-filter="awaiting" onclick="window.app.filterSettlements('awaiting')">
+            <span>⏳ Awaiting Confirmation</span>
+          </button>
+          <button class="btn btn-secondary btn-sm settlement-filter-btn" data-filter="confirmed" onclick="window.app.filterSettlements('confirmed')">
+            <span>✅ Settled / Paid</span>
+          </button>
+          <button class="btn btn-secondary btn-sm settlement-filter-btn" data-filter="rejected" onclick="window.app.filterSettlements('rejected')">
+            <span>❌ Rejected</span>
+          </button>
+          <button class="btn btn-secondary btn-sm settlement-filter-btn" data-filter="disputed" onclick="window.app.filterSettlements('disputed')">
+            <span>⚠️ Disputed</span>
+          </button>
+        </div>
+      </div>
+
+      <div id="settlements-history-list" style="display: flex; flex-direction: column; gap: 0.75rem;">
+        <!-- Injected via JavaScript -->
+      </div>
+    </main>
+
+  </div>
+
+  <!-- MODAL 1: Add / Edit Expense Modal -->
+  <div id="add-expense-modal" class="modal-overlay">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>➕ Add Group Expense</h3>
+        <button class="modal-close-btn" onclick="window.app.closeModal('add-expense-modal')">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Expense Description</label>
+          <input type="text" id="expense-desc-input" class="text-input" placeholder="e.g. Villa Airbnb Booking, Seafood Dinner...">
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <div class="form-group">
+            <label class="form-label">Amount</label>
+            <input type="number" step="0.01" id="expense-amount-input" class="text-input font-mono" placeholder="0.00" oninput="window.app.updateEqualSplitPreview()">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Paid By</label>
+            <select id="expense-payer-select" class="select-input">
+              <!-- Injected via JS -->
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Category</label>
+          <div id="expense-category-grid" class="category-grid-picker">
+            <!-- Injected via JS -->
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Split Method</label>
+          <div class="split-tabs">
+            <button class="split-tab active" data-mode="EQUAL" onclick="window.app.setSplitMode('EQUAL')">Equally</button>
+            <button class="split-tab" data-mode="EXACT" onclick="window.app.setSplitMode('EXACT')">Exact $</button>
+            <button class="split-tab" data-mode="PERCENT" onclick="window.app.setSplitMode('PERCENT')">Percent %</button>
+            <button class="split-tab" data-mode="SHARES" onclick="window.app.setSplitMode('SHARES')">Shares</button>
+          </div>
+        </div>
+
+        <div id="split-options-container">
+          <!-- Injected via JS -->
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <div class="form-group">
+            <label class="form-label">Date</label>
+            <input type="date" id="expense-date-input" class="text-input">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Notes (Optional)</label>
+            <input type="text" id="expense-notes-input" class="text-input" placeholder="Invoice #, location, etc.">
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="window.app.closeModal('add-expense-modal')">Cancel</button>
+        <button class="btn btn-primary" onclick="window.app.saveExpense()">Save Expense</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 2: Settle Debt & Proof Submission Modal -->
+  <div id="settle-modal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 520px;">
+      <div class="modal-header">
+        <h3>💸 Settle Debt & Submit Proof</h3>
+        <button class="modal-close-btn" onclick="window.app.closeModal('settle-modal')">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Target Debt Flow Header -->
+        <div class="glass-card-elevated" style="padding: 0.85rem 1rem; text-align: center;">
+          <div style="font-size: 0.8rem; color: var(--text-muted);">Debt Settlement</div>
+          <div style="font-size: 1.15rem; font-weight: 700; margin: 0.25rem 0;">
+            <span id="settle-from-name" style="color: #fda4af;">Payer</span> ➡️ <span id="settle-to-name" style="color: #6ee7b7;">Receiver</span>
+          </div>
+          <div style="font-size: 0.82rem; color: var(--text-muted);">
+            Outstanding Debt: <strong id="settle-expected-amount-display" class="font-mono" style="color: #ffffff;">$0.00</strong>
+          </div>
+        </div>
+
+        <!-- Paid Amount Input -->
+        <div class="form-group">
+          <label class="form-label">Paid Amount <span class="required-badge">*</span></label>
+          <input type="number" step="0.01" id="settle-amount-input" class="text-input font-mono" style="font-size: 1.25rem; font-weight: 700; text-align: center;" oninput="window.app.validateSettleAmount()">
+          <div id="settle-amount-mismatch-banner" class="amount-mismatch-banner" style="display: none;">
+            ⚠️ <span>Payment amount does not match the outstanding debt (<span id="settle-expected-amount-val">$0.00</span>).</span>
+          </div>
+        </div>
+
+        <!-- Payment Method Selection -->
+        <div class="form-group">
+          <label class="form-label">Payment Method</label>
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem;">
+            <label class="glass-card-elevated method-selector-card" id="method-label-upi" style="display: flex; flex-direction: column; align-items: center; gap: 0.3rem; padding: 0.65rem; cursor: pointer; text-align: center;">
+              <input type="radio" name="payment-method" value="UPI" checked onchange="window.app.onPaymentMethodChange('UPI')">
+              <span style="font-size: 1.2rem;">📱</span>
+              <span style="font-size: 0.75rem; font-weight: 600;">UPI / QR</span>
+            </label>
+            <label class="glass-card-elevated method-selector-card" id="method-label-cash" style="display: flex; flex-direction: column; align-items: center; gap: 0.3rem; padding: 0.65rem; cursor: pointer; text-align: center;">
+              <input type="radio" name="payment-method" value="CASH" onchange="window.app.onPaymentMethodChange('CASH')">
+              <span style="font-size: 1.2rem;">💵</span>
+              <span style="font-size: 0.75rem; font-weight: 600;">Cash</span>
+            </label>
+            <label class="glass-card-elevated method-selector-card" id="method-label-bank" style="display: flex; flex-direction: column; align-items: center; gap: 0.3rem; padding: 0.65rem; cursor: pointer; text-align: center;">
+              <input type="radio" name="payment-method" value="BANK_TRANSFER" onchange="window.app.onPaymentMethodChange('BANK_TRANSFER')">
+              <span style="font-size: 1.2rem;">🏦</span>
+              <span style="font-size: 0.75rem; font-weight: 600;">Bank / Card</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- METHOD 1: UPI Panel -->
+        <div id="settle-panel-upi">
+          <div class="qr-preview-box" style="margin-bottom: 1rem;">
+            <canvas id="settle-qr-canvas" width="180" height="180"></canvas>
+            <div style="margin-top: 0.5rem; font-size: 0.75rem; color: #475569; font-weight: 600;">
+              Scan via GPay / PhonePe / Paytm / BHIM
+            </div>
+            <div id="settle-upi-id-display" class="font-mono" style="font-size: 0.75rem; color: #6366f1; font-weight: 700; margin-top: 0.2rem;">
+              receiver@upi
+            </div>
+          </div>
+        </div>
+
+        <!-- METHOD 2: Bank / Card Panel -->
+        <div id="settle-panel-bank" style="display: none;">
+          <div class="glass-card-elevated" style="padding: 0.85rem; margin-bottom: 0.85rem;">
+            <div style="font-size: 0.8rem; font-weight: 700; color: #93c5fd; margin-bottom: 0.3rem;">🏦 Direct Bank / Card Transfer</div>
+            <div style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.4;">
+              Transfer funds directly via Net Banking, IMPS/NEFT, or Card to <strong id="settle-bank-receiver-name">Receiver</strong>. After transfer, upload your transfer confirmation slip below.
+            </div>
+          </div>
+        </div>
+
+        <!-- METHOD 3: Cash Panel -->
+        <div id="settle-panel-cash" style="display: none;">
+          <div class="glass-card-elevated" style="padding: 1rem; text-align: center; border-color: rgba(245, 158, 11, 0.3); background: rgba(245, 158, 11, 0.05); margin-bottom: 0.85rem;">
+            <div style="font-size: 1.5rem; margin-bottom: 0.3rem;">🤝</div>
+            <div style="font-size: 0.95rem; font-weight: 700; color: #fde68a;">Cash Handover Confirmation</div>
+            <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.4rem; line-height: 1.4;">
+              Have you physically given this cash amount to <strong id="settle-cash-receiver-display" style="color: #6ee7b7;">Receiver</strong>?
+            </div>
+            <div style="font-size: 0.72rem; color: #f59e0b; margin-top: 0.5rem; font-weight: 600;">
+              ℹ️ Cash payments require physical confirmation from the receiver before the debt is marked as settled.
+            </div>
+          </div>
+        </div>
+
+        <!-- Proof Upload & Fields for Digital Methods (UPI & Bank) -->
+        <div id="settle-digital-proof-fields">
+          <!-- Proof Security Warning Notice -->
+          <div class="proof-warning-banner">
+            <span>🛡️</span>
+            <div>
+              <strong>Security Safeguard:</strong> A screenshot is only supporting proof and may be edited. Always verify transaction/reference details. Final debt clearance requires receiver confirmation.
+            </div>
+          </div>
+
+          <!-- Proof Image Upload -->
+          <div class="form-group" style="margin-top: 0.75rem;">
+            <label class="form-label">Upload Payment Proof (Screenshot / Slip) <span class="required-badge">*</span></label>
+            <div class="proof-upload-zone" id="proof-upload-dropzone" onclick="document.getElementById('settle-proof-file-input').click()">
+              <input type="file" id="settle-proof-file-input" accept="image/*" style="display: none;" onchange="window.app.handleProofFileSelect(event)">
+              <div id="proof-upload-prompt" style="display: flex; flex-direction: column; align-items: center; gap: 0.4rem; padding: 1rem;">
+                <span style="font-size: 1.5rem;">📸</span>
+                <span style="font-size: 0.82rem; font-weight: 600; color: var(--primary-light);">Click to upload payment screenshot</span>
+                <span style="font-size: 0.72rem; color: var(--text-muted);">PNG, JPG, WEBP accepted</span>
+              </div>
+              <div id="proof-upload-preview" style="display: none; padding: 0.5rem; text-align: center;">
+                <img id="proof-preview-img" src="" alt="Payment Proof Preview" style="max-height: 140px; border-radius: var(--radius-sm); max-width: 100%; border: 1px solid var(--border-glass);">
+                <div style="font-size: 0.72rem; color: #34d399; margin-top: 0.3rem;">✓ Screenshot attached (Click to replace)</div>
+              </div>
+            </div>
+            <span class="field-error" id="settle-proof-error"></span>
+          </div>
+
+          <!-- Transaction / Reference ID -->
+          <div class="form-group">
+            <label class="form-label">Transaction ID / UTR / Reference Number (Optional)</label>
+            <input type="text" id="settle-txn-id-input" class="text-input font-mono" placeholder="e.g. UPI Ref #492837491029 or UTR12345678">
+          </div>
+        </div>
+
+        <!-- Date & Time -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+          <div class="form-group">
+            <label class="form-label">Payment Date</label>
+            <input type="date" id="settle-date-input" class="text-input">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Payment Time</label>
+            <input type="time" id="settle-time-input" class="text-input">
+          </div>
+        </div>
+
+        <!-- Reference Notes -->
+        <div class="form-group">
+          <label class="form-label">Note / Remark (Optional)</label>
+          <input type="text" id="settle-note-input" class="text-input" placeholder="e.g. Paid for Goa Villa & Drinks">
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="window.app.closeModal('settle-modal')">Cancel</button>
+        <button id="settle-submit-btn" class="btn btn-primary" onclick="window.app.submitSettlementProof()">
+          📤 Submit Payment Proof
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Receiver Review & Verification Modal -->
+  <div id="review-settlement-modal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 520px;">
+      <div class="modal-header">
+        <h3>🔍 Review Payment Proof</h3>
+        <button class="modal-close-btn" onclick="window.app.closeModal('review-settlement-modal')">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div id="review-status-badge-container" style="display: flex; justify-content: center; margin-bottom: 0.5rem;">
+          <!-- Status Badge Injected via JS -->
+        </div>
+
+        <div class="glass-card-elevated" style="padding: 1rem; text-align: center;">
+          <div style="font-size: 0.8rem; color: var(--text-muted);">Payment Claimed By</div>
+          <div style="font-size: 1.15rem; font-weight: 700; margin: 0.25rem 0;">
+            <span id="review-from-name" style="color: #fda4af;">Payer</span> ➡️ <span id="review-to-name" style="color: #6ee7b7;">Receiver</span>
+          </div>
+          <div class="font-mono" style="font-size: 1.5rem; font-weight: 800; color: #ffffff; margin-top: 0.35rem;" id="review-amount-display">
+            $0.00
+          </div>
+        </div>
+
+        <!-- Verification Details Table -->
+        <div class="glass-card-elevated" style="padding: 0.85rem 1rem;">
+          <div class="receipt-row">
+            <span style="color: var(--text-muted);">Payment Method:</span>
+            <strong id="review-method-val">UPI</strong>
+          </div>
+          <div class="receipt-row">
+            <span style="color: var(--text-muted);">Submitted Date/Time:</span>
+            <span id="review-date-val" class="font-mono">2026-08-16 12:00</span>
+          </div>
+          <div class="receipt-row" id="review-txn-row">
+            <span style="color: var(--text-muted);">Transaction / UTR ID:</span>
+            <strong id="review-txn-val" class="font-mono" style="color: var(--primary-light);">TXN-123456</strong>
+          </div>
+          <div class="receipt-row" id="review-note-row">
+            <span style="color: var(--text-muted);">Payer Note:</span>
+            <span id="review-note-val">Settlement</span>
+          </div>
+        </div>
+
+        <!-- Proof Image Box (if available) -->
+        <div id="review-proof-container" style="display: flex; flex-direction: column; gap: 0.4rem;">
+          <label class="form-label" style="display: flex; justify-content: space-between;">
+            <span>Attached Screenshot Proof</span>
+            <span style="font-size: 0.72rem; color: var(--text-muted);">Click image to expand</span>
+          </label>
+          <div class="review-proof-box" style="text-align: center; background: #000; border-radius: var(--radius-md); padding: 0.5rem; border: 1px solid var(--border-glass);">
+            <img id="review-proof-img" src="" alt="Payment Proof" style="max-height: 220px; max-width: 100%; border-radius: var(--radius-sm); cursor: pointer;" onclick="window.open(this.src, '_blank')">
+          </div>
+          <div class="proof-warning-banner" style="margin-top: 0.3rem;">
+            <span>🛡️</span>
+            <div><strong>Verification Tip:</strong> Check your bank account or payment app to verify that funds were received before confirming.</div>
+          </div>
+        </div>
+
+        <!-- Cash Physical Prompt (if cash) -->
+        <div id="review-cash-prompt" style="display: none;">
+          <div class="glass-card-elevated" style="padding: 1rem; text-align: center; border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.08);">
+            <div style="font-size: 1.25rem; font-weight: 700; color: #fde68a;">
+              Did you receive <span id="review-cash-amount-val" class="font-mono">$0.00</span> in cash?
+            </div>
+            <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.35rem;">
+              Confirm only if you have physically received this cash amount.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer" style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem;">
+        <button class="btn btn-secondary btn-sm" style="color: #f59e0b;" onclick="window.app.openDisputeModalFromReview()">
+          ⚠️ Report / Dispute
+        </button>
+
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn btn-secondary" style="color: #f87171;" onclick="window.app.openRejectModalFromReview()">
+            ❌ Reject
+          </button>
+          <button class="btn btn-emerald" onclick="window.app.confirmReceiverSettlementAction()">
+            ✅ Confirm Received
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Reject Payment Reason Modal -->
+  <div id="reject-settlement-modal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 440px;">
+      <div class="modal-header">
+        <h3>❌ Reject Payment</h3>
+        <button class="modal-close-btn" onclick="window.app.closeModal('reject-settlement-modal')">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.4;">
+          Please select the reason for rejecting this payment claim. The debt will remain active and unsettled.
+        </p>
+
+        <div class="form-group">
+          <label class="form-label">Rejection Reason <span class="required-badge">*</span></label>
+          <div class="rejection-reasons-grid">
+            <label class="glass-card-elevated rejection-option">
+              <input type="radio" name="rejection-reason-radio" value="Payment not received" checked>
+              <span>Payment not received in bank/app</span>
+            </label>
+            <label class="glass-card-elevated rejection-option">
+              <input type="radio" name="rejection-reason-radio" value="Wrong amount">
+              <span>Wrong amount received</span>
+            </label>
+            <label class="glass-card-elevated rejection-option">
+              <input type="radio" name="rejection-reason-radio" value="Incorrect transaction">
+              <span>Incorrect / invalid transaction reference</span>
+            </label>
+            <label class="glass-card-elevated rejection-option">
+              <input type="radio" name="rejection-reason-radio" value="Duplicate payment">
+              <span>Duplicate / previously settled payment</span>
+            </label>
+            <label class="glass-card-elevated rejection-option">
+              <input type="radio" name="rejection-reason-radio" value="Other">
+              <span>Other issue / mismatch</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Additional Explanation (Optional)</label>
+          <input type="text" id="reject-reason-notes" class="text-input" placeholder="e.g. Account shows 0 incoming transactions today">
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="window.app.closeModal('reject-settlement-modal')">Cancel</button>
+        <button class="btn btn-secondary" style="color: #f87171; border-color: rgba(248, 113, 113, 0.4);" onclick="window.app.submitSettlementRejection()">
+          ❌ Confirm Rejection
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Dispute Settlement Modal -->
+  <div id="dispute-settlement-modal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 440px;">
+      <div class="modal-header">
+        <h3>⚠️ Dispute Settlement</h3>
+        <button class="modal-close-btn" onclick="window.app.closeModal('dispute-settlement-modal')">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.4;">
+          Disputing this settlement flags it for group review and prevents automatic finalization until resolved by both parties.
+        </p>
+
+        <div class="form-group">
+          <label class="form-label">Dispute Details / Problem Description <span class="required-badge">*</span></label>
+          <textarea id="dispute-reason-notes" class="text-input" rows="3" placeholder="Describe the discrepancy, missing receipt, or bank error..."></textarea>
+          <span class="field-error" id="dispute-reason-error"></span>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="window.app.closeModal('dispute-settlement-modal')">Cancel</button>
+        <button class="btn btn-primary" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);" onclick="window.app.submitSettlementDispute()">
+          ⚠️ Flag as Disputed
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 3: Digital Receipt Modal -->
+  <div id="receipt-modal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 460px;">
+      <div class="modal-header">
+        <h3>🧾 Settlement Receipt</h3>
+        <button class="modal-close-btn" onclick="window.app.closeModal('receipt-modal')">✕</button>
+      </div>
+
+      <div class="modal-body" style="padding: 1rem;">
+        <div class="receipt-paper">
+          <div class="receipt-header">
+            <h4>SETTLE UP RECEIPT</h4>
+            <p id="receipt-room-name" style="font-size: 0.8rem; color: #64748b; font-weight: 600;">Trip Name</p>
+            <p style="font-size: 0.75rem; color: #94a3b8; margin-top: 0.2rem;">Official Proof of Debt Clearance</p>
+          </div>
+
+          <div class="receipt-row">
+            <span style="color: #64748b;">Transaction ID:</span>
+            <strong id="receipt-id-val" class="font-mono">TXN-000000</strong>
+          </div>
+          <div class="receipt-row">
+            <span style="color: #64748b;">Date & Time:</span>
+            <span id="receipt-date-val">2026-08-15 12:00</span>
+          </div>
+          <div class="receipt-row">
+            <span style="color: #64748b;">Paid By (Debtor):</span>
+            <strong id="receipt-from-val">Payer</strong>
+          </div>
+          <div class="receipt-row">
+            <span style="color: #64748b;">Received By (Creditor):</span>
+            <strong id="receipt-to-val">Receiver</strong>
+          </div>
+          <div class="receipt-row">
+            <span style="color: #64748b;">Payment Method:</span>
+            <span id="receipt-method-val">UPI / Instant</span>
+          </div>
+          <div class="receipt-row">
+            <span style="color: #64748b;">Notes:</span>
+            <span id="receipt-note-val">Settlement</span>
+          </div>
+
+          <div class="receipt-total">
+            <div style="display: flex; justify-content: space-between;">
+              <span>AMOUNT SETTLED:</span>
+              <span id="receipt-amount-val" class="font-mono">$0.00</span>
+            </div>
+          </div>
+
+          <div class="receipt-stamp">PAID & SETTLED</div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="window.app.printReceipt()">🖨️ Print / Save PDF</button>
+        <button class="btn btn-primary" onclick="window.app.closeModal('receipt-modal')">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 4: Add Member Modal -->
+  <div id="add-member-modal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 440px;">
+      <div class="modal-header">
+        <h3>👥 Add Trip Member</h3>
+        <button class="modal-close-btn" onclick="window.app.closeModal('add-member-modal')">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" for="new-member-name">Member Name <span class="required-badge">*</span></label>
+          <input type="text" id="new-member-name" class="text-input" placeholder="e.g. Samantha, John..." autocomplete="name">
+          <span class="field-error" id="new-member-name-error"></span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="new-member-google-id">Google ID / Gmail <span class="required-badge">*</span></label>
+          <input type="email" id="new-member-google-id" class="text-input" placeholder="e.g. samantha.doe@gmail.com" autocomplete="email">
+          <span class="field-error" id="new-member-google-id-error"></span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="new-member-phone">Phone Number <span class="required-badge">*</span></label>
+          <input type="tel" id="new-member-phone" class="text-input" placeholder="e.g. +1 555-0199 or 9876543210" autocomplete="tel">
+          <span class="field-error" id="new-member-phone-error"></span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="new-member-upi">UPI ID / VPA (Optional)</label>
+          <input type="text" id="new-member-upi" class="text-input" placeholder="e.g. samantha@okhdfcbank">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Avatar Color</label>
+          <div id="member-color-picker" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <!-- Injected via JS -->
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="window.app.closeModal('add-member-modal')">Cancel</button>
+        <button class="btn btn-primary" onclick="window.app.saveNewMember()">Add Member</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 5: Edit Member Modal -->
+  <div id="edit-member-modal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 440px;">
+      <div class="modal-header">
+        <h3>👤 Edit Member Profile</h3>
+        <button class="modal-close-btn" onclick="window.app.closeModal('edit-member-modal')">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" for="edit-member-name">Member Name <span class="required-badge">*</span></label>
+          <input type="text" id="edit-member-name" class="text-input" autocomplete="name">
+          <span class="field-error" id="edit-member-name-error"></span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="edit-member-google-id">Google ID / Gmail <span class="required-badge">*</span></label>
+          <input type="email" id="edit-member-google-id" class="text-input" placeholder="e.g. name@gmail.com" autocomplete="email">
+          <span class="field-error" id="edit-member-google-id-error"></span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="edit-member-phone">Phone Number <span class="required-badge">*</span></label>
+          <input type="tel" id="edit-member-phone" class="text-input" placeholder="e.g. +1 555-0199 or 9876543210" autocomplete="tel">
+          <span class="field-error" id="edit-member-phone-error"></span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="edit-member-upi">UPI ID / VPA</label>
+          <input type="text" id="edit-member-upi" class="text-input" placeholder="e.g. name@upi">
+        </div>
+      </div>
+
+      <div class="modal-footer" style="justify-content: space-between;">
+        <button class="btn btn-secondary" style="color: #f87171;" onclick="window.app.deleteMember()">🗑️ Remove</button>
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn btn-secondary" onclick="window.app.closeModal('edit-member-modal')">Cancel</button>
+          <button class="btn btn-primary" onclick="window.app.saveEditMember()">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 6: Share Room Modal -->
+  <div id="share-room-modal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 440px;">
+      <div class="modal-header">
+        <h3>📱 Share Room Link</h3>
+        <button class="modal-close-btn" onclick="window.app.closeModal('share-room-modal')">✕</button>
+      </div>
+
+      <div class="modal-body" style="text-align: center;">
+        <div class="qr-preview-box" style="margin-bottom: 1rem;">
+          <canvas id="share-room-qr-canvas" width="200" height="200"></canvas>
+        </div>
+
+        <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+          Room ID: <strong id="share-room-id-display" class="font-mono" style="color: var(--primary-light);">GOA2026</strong>
+        </div>
+
+        <div class="form-group">
+          <input type="text" id="share-room-url-input" class="text-input font-mono" readonly style="font-size: 0.8rem; text-align: center;">
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-primary" style="width: 100%;" onclick="window.app.copyRoomLink()">
+          📋 Copy Shareable Link
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 7: Create / Switch Room Modal -->
+  <div id="create-room-modal" class="modal-overlay">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>🏠 Room Switcher</h3>
+        <button class="modal-close-btn" onclick="window.app.closeModal('create-room-modal')">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Create New Room ID (e.g. TRIP-2026, PARIS-TRIP)</label>
+          <input type="text" id="new-room-id-input" class="text-input font-mono" style="text-transform: uppercase;">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Room Title</label>
+          <input type="text" id="new-room-name-input" class="text-input" placeholder="e.g. Eurotrip Summer 2026">
+        </div>
+
+        <button class="btn btn-primary" style="width: 100%; margin-top: 0.5rem;" onclick="window.app.confirmCreateRoom()">
+          ✨ Create New Room
+        </button>
+
+        <hr style="border: none; border-top: 1px solid var(--border-glass); margin: 1rem 0;">
+
+        <div class="form-label" style="margin-bottom: 0.5rem;">Previously Visited Rooms</div>
+        <div id="saved-rooms-list">
+          <!-- Injected via JS -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Module Entrypoint -->
+  <script type="module" src="./src/js/app.js"></script>
+</body>
+</html>
