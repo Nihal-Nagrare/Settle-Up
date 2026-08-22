@@ -1,18 +1,47 @@
 /**
  * Settle Up - Main Application Logic
- * Integrates Greedy Cash-Flow Engine, Room Store, QR UPI generator, Canvas Confetti & Analytics.
+ * Integrates Greedy Cash-Flow Engine, Room Store, QR UPI generator, Canvas Confetti,
+ * Visual Spending Analytics, Group Search, Join Request Authorization, and Room Lifecycle Management.
  */
 
 import { simplifyDebtsGreedy, calculateNetBalances } from './greedyAlgorithm.js';
 import { 
   loadRoom, 
+  loadRoomAsync,
   saveRoom, 
+  saveRoomAsync,
   getCurrentRoomId, 
   setUrlRoomId, 
   createSampleRoom, 
   generateRoomId, 
+  getShareableRoomUrl,
+  getUserProfile,
+  saveUserProfile,
   listSavedRooms, 
+  listSavedRoomsAsync,
   deleteSavedRoom, 
+  deleteSavedRoomAsync,
+  resetSampleRoomAsync,
+  apiSearchRooms,
+  apiGetRoomPublic,
+  apiSubmitJoinRequest,
+  apiListJoinRequests,
+  apiProcessJoinRequest,
+  apiUpdateRoomStatus,
+  apiRestoreRoom,
+  apiAddMember,
+  apiUpdateMember,
+  apiDeleteMember,
+  apiAddExpense,
+  apiUpdateExpense,
+  apiDeleteExpense,
+  apiAddSettlement,
+  apiUpdateSettlement,
+  apiDeleteSettlement,
+  apiUpdateCurrency,
+  apiFetchRoomBalances,
+  apiFetchRoomSimplification,
+  apiSyncUserProfile,
   formatCurrency, 
   CURRENCIES, 
   CATEGORIES, 
@@ -24,6 +53,7 @@ import { triggerConfetti } from './confetti.js';
 // Application Global State
 let currentRoom = null;
 let activeTab = 'simplifier'; // 'simplifier' | 'expenses' | 'analytics' | 'settlements'
+let activeHubTab = 'active'; // 'active' | 'search' | 'requests' | 'archived' | 'create'
 let expenseSearchQuery = '';
 let expenseCategoryFilter = 'all';
 let currentSplitMode = 'EQUAL'; // 'EQUAL' | 'EXACT' | 'PERCENT' | 'SHARES'
@@ -34,6 +64,8 @@ let selectedPaymentMethod = 'UPI'; // 'UPI' | 'CASH' | 'BANK_TRANSFER'
 let currentUploadedProofBase64 = null;
 let activeReviewSettlementId = null;
 let activeSettlementFilter = 'all'; // 'all' | 'awaiting' | 'confirmed' | 'rejected' | 'disputed'
+let targetJoinRoomId = null;
+let groupSearchDebounceTimer = null;
 
 // Toast Utility
 export function showToast(message, type = 'success') {
@@ -56,13 +88,45 @@ export function showToast(message, type = 'success') {
 }
 
 // Initialize Application
-export function initApp() {
-  const roomId = getCurrentRoomId();
-  currentRoom = loadRoom(roomId);
-  setUrlRoomId(currentRoom.id);
+export async function initApp() {
+  const pathname = window.location.pathname;
+  const urlParams = new URLSearchParams(window.location.search);
+  const joinParam = urlParams.get('join');
+  const isJoinRoute = (pathname && pathname.startsWith('/join-room/')) || Boolean(joinParam);
 
+  let targetRoomId = 'GOA2026';
+  if (pathname && pathname.startsWith('/join-room/')) {
+    targetRoomId = pathname.replace('/join-room/', '').trim().toUpperCase();
+  } else if (joinParam) {
+    targetRoomId = joinParam.trim().toUpperCase();
+  } else {
+    targetRoomId = getCurrentRoomId();
+  }
+
+  // 1. Instant local render for speed
+  currentRoom = loadRoom(targetRoomId);
+  setUrlRoomId(currentRoom.id);
   setupEventListeners();
   renderApp();
+
+  // 2. Asynchronously sync with Python backend API
+  try {
+    const serverRoom = await loadRoomAsync(targetRoomId);
+    if (serverRoom) {
+      currentRoom = serverRoom;
+      renderApp();
+    }
+  } catch (e) {
+    console.log('Running in local/offline cache mode:', e);
+  }
+
+  // 3. If user navigated via /join-room/XYZ, open Join Modal
+  if (isJoinRoute && targetRoomId) {
+    openJoinRoomModal(targetRoomId);
+  }
+
+  // 4. Background check for pending join requests badge
+  checkPendingJoinRequestsCount();
 }
 
 // Render entire application UI
@@ -70,15 +134,24 @@ export function renderApp() {
   if (!currentRoom) return;
 
   renderHeader();
+  renderLifecycleBanner();
   renderMemberBar();
   renderActiveTab();
+  checkPendingJoinRequestsCount();
 }
 
-// Render Header & Currency
+// Render Header, Status Badge & Controls
 function renderHeader() {
   const roomNameEl = document.getElementById('room-name-display');
   const roomIdBadge = document.getElementById('room-id-badge');
   const currencySelect = document.getElementById('currency-select');
+  const statusBadge = document.getElementById('room-status-badge');
+  const closeBtn = document.getElementById('header-close-room-btn');
+  const archiveBtn = document.getElementById('header-archive-room-btn');
+  const restoreBtn = document.getElementById('header-restore-room-btn');
+  const addExpenseBtn = document.getElementById('header-add-expense-btn');
+  const addFriendBtn = document.getElementById('members-add-friend-btn');
+  const tabAddExpenseBtn = document.getElementById('expenses-tab-add-btn');
 
   if (roomNameEl) {
     roomNameEl.innerText = currentRoom.name || `Room #${currentRoom.id}`;
@@ -89,6 +162,84 @@ function renderHeader() {
   if (currencySelect) {
     currencySelect.value = currentRoom.currency || 'USD';
   }
+
+  const status = currentRoom.status || 'ACTIVE';
+
+  if (statusBadge) {
+    statusBadge.className = `room-status-pill ${
+      status === 'COMPLETED' ? 'status-pill-completed' :
+      status === 'DISCARDED' ? 'status-pill-archived' :
+      'status-pill-active'
+    }`;
+    statusBadge.innerText = status;
+  }
+
+  const isReadOnly = status === 'COMPLETED' || status === 'DISCARDED';
+
+  if (closeBtn) closeBtn.style.display = status === 'ACTIVE' ? 'inline-flex' : 'none';
+  if (archiveBtn) archiveBtn.style.display = status === 'ACTIVE' ? 'inline-flex' : 'none';
+  if (restoreBtn) restoreBtn.style.display = isReadOnly ? 'inline-flex' : 'none';
+
+  if (addExpenseBtn) addExpenseBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
+  if (addFriendBtn) addFriendBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
+  if (tabAddExpenseBtn) tabAddExpenseBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
+}
+
+// Render Lifecycle Banner for Completed / Archived Rooms
+function renderLifecycleBanner() {
+  const container = document.getElementById('room-lifecycle-banner-container');
+  if (!container) return;
+
+  const status = currentRoom.status || 'ACTIVE';
+  if (status === 'ACTIVE') {
+    container.innerHTML = '';
+    return;
+  }
+
+  const result = simplifyDebtsGreedy(currentRoom.members, currentRoom.expenses, currentRoom.settlements);
+  const isSettled = result.transfers.length === 0;
+
+  if (status === 'COMPLETED') {
+    container.innerHTML = `
+      <div class="glass-card room-lifecycle-banner ${isSettled ? 'banner-settled' : 'banner-completed'}">
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+          <span style="font-size: 1.5rem;">${isSettled ? '🎉' : '🔒'}</span>
+          <div>
+            <h4 style="margin: 0; font-size: 0.95rem; font-weight: 700; color: ${isSettled ? '#6ee7b7' : '#c4b5fd'};">
+              ${isSettled ? 'Trip Completed & Settled in Full' : 'Trip Completed & Closed'}
+            </h4>
+            <p style="font-size: 0.78rem; color: var(--text-muted); margin: 0.15rem 0 0 0;">
+              ${isSettled 
+                ? 'All group expenses and debts have been cleared. All records are archived in read-only mode.' 
+                : 'This room is closed to new expenses or members. Historical balances and receipts remain accessible.'}
+            </p>
+          </div>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="window.app.restoreCurrentRoom()">
+          🔄 Re-Open / Restore Trip
+        </button>
+      </div>
+    `;
+  } else if (status === 'DISCARDED') {
+    container.innerHTML = `
+      <div class="glass-card room-lifecycle-banner banner-completed" style="border-color: rgba(245, 158, 11, 0.4);">
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+          <span style="font-size: 1.5rem;">📦</span>
+          <div>
+            <h4 style="margin: 0; font-size: 0.95rem; font-weight: 700; color: #fde68a;">
+              Archived Trip
+            </h4>
+            <p style="font-size: 0.78rem; color: var(--text-muted); margin: 0.15rem 0 0 0;">
+              This trip was archived. Historical financial records are preserved.
+            </p>
+          </div>
+        </div>
+        <button class="btn btn-emerald btn-sm" onclick="window.app.restoreCurrentRoom()">
+          🔄 Restore Trip to Active
+        </button>
+      </div>
+    `;
+  }
 }
 
 // Render Member Bar with real-time Net Balances
@@ -98,6 +249,7 @@ function renderMemberBar() {
 
   const balances = calculateNetBalances(currentRoom.members, currentRoom.expenses, currentRoom.settlements);
   const currency = currentRoom.currency || 'USD';
+  const isReadOnly = currentRoom.status === 'COMPLETED' || currentRoom.status === 'DISCARDED';
 
   membersListEl.innerHTML = currentRoom.members.map(member => {
     const net = balances[member.id] || 0;
@@ -122,7 +274,7 @@ function renderMemberBar() {
     const tooltipText = tooltipParts.join(' | ');
 
     return `
-      <div class="member-chip" onclick="window.app.openEditMemberModal('${member.id}')" title="${escapeHtml(tooltipText)}">
+      <div class="member-chip" onclick="${isReadOnly ? '' : `window.app.openEditMemberModal('${member.id}')`}" title="${escapeHtml(tooltipText)}">
         <div class="member-avatar" style="background-color: ${member.avatarColor || '#6366f1'}">
           ${initial}
         </div>
@@ -147,7 +299,6 @@ function renderActiveTab() {
   if (analyticsView) analyticsView.style.display = activeTab === 'analytics' ? 'block' : 'none';
   if (settlementsView) settlementsView.style.display = activeTab === 'settlements' ? 'block' : 'none';
 
-  // Update tab buttons
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tab === activeTab);
   });
@@ -162,6 +313,7 @@ function renderActiveTab() {
 function renderSimplifierTab() {
   const result = simplifyDebtsGreedy(currentRoom.members, currentRoom.expenses, currentRoom.settlements);
   const currency = currentRoom.currency || 'USD';
+  const isReadOnly = currentRoom.status === 'COMPLETED' || currentRoom.status === 'DISCARDED';
 
   // Render Stats Banner
   const totalExpenseEl = document.getElementById('stat-total-expense');
@@ -214,9 +366,11 @@ function renderSimplifierTab() {
           <p style="color: var(--text-muted); max-width: 420px;">
             There are no pending debts in this room. Add a new expense or load sample data to test the Greedy Debt Simplification engine.
           </p>
-          <button class="btn btn-primary" onclick="window.app.openAddExpenseModal()">
-            ➕ Add First Expense
-          </button>
+          ${isReadOnly ? '' : `
+            <button class="btn btn-primary" onclick="window.app.openAddExpenseModal()">
+              ➕ Add First Expense
+            </button>
+          `}
         </div>
       `;
     } else {
@@ -224,7 +378,6 @@ function renderSimplifierTab() {
         const fromInitial = (transfer.fromMemberName || 'U').charAt(0).toUpperCase();
         const toInitial = (transfer.toMemberName || 'U').charAt(0).toUpperCase();
 
-        // Check if there is an active pending settlement awaiting receiver confirmation
         const pendingSettlement = currentRoom.settlements.find(s => 
           s.fromMemberId === transfer.fromMemberId && 
           s.toMemberId === transfer.toMemberId && 
@@ -243,6 +396,12 @@ function renderSimplifierTab() {
               <button class="btn btn-secondary" style="width: 100%; border-color: rgba(245, 158, 11, 0.5); color: #fde68a;" onclick="window.app.openReviewSettlementModal('${pendingSettlement.id}')">
                 🔍 Review Proof & Confirm
               </button>
+            </div>
+          `;
+        } else if (isReadOnly) {
+          actionButtonHtml = `
+            <div style="text-align: center; font-size: 0.75rem; color: var(--text-muted); padding: 0.35rem 0;">
+              🔒 Room Closed (Read-Only)
             </div>
           `;
         } else {
@@ -316,6 +475,7 @@ function renderExpensesTab() {
 
   const currency = currentRoom.currency || 'USD';
   const memberMap = new Map(currentRoom.members.map(m => [m.id, m]));
+  const isReadOnly = currentRoom.status === 'COMPLETED' || currentRoom.status === 'DISCARDED';
 
   let filteredExpenses = [...currentRoom.expenses];
 
@@ -331,7 +491,6 @@ function renderExpensesTab() {
     filteredExpenses = filteredExpenses.filter(exp => exp.category === expenseCategoryFilter);
   }
 
-  // Sort descending by date
   filteredExpenses.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
   if (filteredExpenses.length === 0) {
@@ -340,7 +499,7 @@ function renderExpensesTab() {
         <div class="empty-icon">🧾</div>
         <h3 style="font-size: 1.2rem; font-weight: 700;">No Expenses Found</h3>
         <p style="color: var(--text-muted);">Try adjusting your search filter or add a new expense.</p>
-        <button class="btn btn-primary" onclick="window.app.openAddExpenseModal()">➕ Add Expense</button>
+        ${isReadOnly ? '' : `<button class="btn btn-primary" onclick="window.app.openAddExpenseModal()">➕ Add Expense</button>`}
       </div>
     `;
     return;
@@ -372,11 +531,13 @@ function renderExpensesTab() {
 
         <div class="expense-amount-box">
           <span class="expense-amount-val">${formatCurrency(exp.amount, currency)}</span>
-          <div style="display: flex; gap: 0.5rem;">
-            <button class="btn btn-secondary btn-sm" onclick="window.app.deleteExpense('${exp.id}')" title="Delete expense">
-              🗑️
-            </button>
-          </div>
+          ${isReadOnly ? '' : `
+            <div style="display: flex; gap: 0.5rem;">
+              <button class="btn btn-secondary btn-sm" onclick="window.app.deleteExpense('${exp.id}')" title="Delete expense">
+                🗑️
+              </button>
+            </div>
+          `}
         </div>
       </div>
     `;
@@ -536,8 +697,8 @@ export function renderSettlementsTab() {
 
   const currency = currentRoom.currency || 'USD';
   const memberMap = new Map(currentRoom.members.map(m => [m.id, m]));
+  const isReadOnly = currentRoom.status === 'COMPLETED' || currentRoom.status === 'DISCARDED';
 
-  // Update active filter buttons
   document.querySelectorAll('.settlement-filter-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.filter === activeSettlementFilter);
   });
@@ -553,7 +714,6 @@ export function renderSettlementsTab() {
     filtered = filtered.filter(s => s.status === 'DISPUTED');
   }
 
-  // Sort latest first
   filtered.sort((a, b) => new Date(b.timestamp || b.submittedAt || 0) - new Date(a.timestamp || a.submittedAt || 0));
 
   if (filtered.length === 0) {
@@ -582,9 +742,11 @@ export function renderSettlementsTab() {
         <button class="btn btn-emerald btn-sm" onclick="window.app.openReviewSettlementModal('${set.id}')">
           🔍 Review & Confirm
         </button>
-        <button class="btn btn-secondary btn-sm" style="color: #f87171;" onclick="window.app.deleteSettlement('${set.id}')" title="Delete record">
-          🗑️
-        </button>
+        ${isReadOnly ? '' : `
+          <button class="btn btn-secondary btn-sm" style="color: #f87171;" onclick="window.app.deleteSettlement('${set.id}')" title="Delete record">
+            🗑️
+          </button>
+        `}
       `;
     } else if (status === 'CONFIRMED' || status === 'SETTLED') {
       statusBadgeHtml = `<span class="status-badge status-badge-confirmed">✅ Settled & Paid</span>`;
@@ -592,9 +754,11 @@ export function renderSettlementsTab() {
         <button class="btn btn-secondary btn-sm" onclick="window.app.viewReceipt('${set.id}')">
           🧾 Receipt
         </button>
-        <button class="btn btn-secondary btn-sm" style="color: #f87171;" onclick="window.app.deleteSettlement('${set.id}')" title="Delete record">
-          🗑️
-        </button>
+        ${isReadOnly ? '' : `
+          <button class="btn btn-secondary btn-sm" style="color: #f87171;" onclick="window.app.deleteSettlement('${set.id}')" title="Delete record">
+            🗑️
+          </button>
+        `}
       `;
     } else if (status === 'REJECTED') {
       statusBadgeHtml = `<span class="status-badge status-badge-rejected">❌ Rejected: ${escapeHtml(set.rejectionReason || 'Declined')}</span>`;
@@ -602,9 +766,11 @@ export function renderSettlementsTab() {
         <button class="btn btn-secondary btn-sm" onclick="window.app.openReviewSettlementModal('${set.id}')">
           🔍 Details
         </button>
-        <button class="btn btn-secondary btn-sm" style="color: #f87171;" onclick="window.app.deleteSettlement('${set.id}')" title="Delete record">
-          🗑️
-        </button>
+        ${isReadOnly ? '' : `
+          <button class="btn btn-secondary btn-sm" style="color: #f87171;" onclick="window.app.deleteSettlement('${set.id}')" title="Delete record">
+            🗑️
+          </button>
+        `}
       `;
     } else if (status === 'DISPUTED') {
       statusBadgeHtml = `<span class="status-badge status-badge-disputed">⚠️ Disputed Settlement</span>`;
@@ -612,9 +778,11 @@ export function renderSettlementsTab() {
         <button class="btn btn-secondary btn-sm" style="color: #f59e0b;" onclick="window.app.openReviewSettlementModal('${set.id}')">
           🔍 Review Dispute
         </button>
-        <button class="btn btn-secondary btn-sm" style="color: #f87171;" onclick="window.app.deleteSettlement('${set.id}')" title="Delete record">
-          🗑️
-        </button>
+        ${isReadOnly ? '' : `
+          <button class="btn btn-secondary btn-sm" style="color: #f87171;" onclick="window.app.deleteSettlement('${set.id}')" title="Delete record">
+            🗑️
+          </button>
+        `}
       `;
     }
 
@@ -658,7 +826,6 @@ export function renderSettlementsTab() {
 
 // Setup Event Listeners
 function setupEventListeners() {
-  // Tab Switching
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       activeTab = btn.dataset.tab;
@@ -666,18 +833,22 @@ function setupEventListeners() {
     });
   });
 
-  // Currency Switcher
   const currencySelect = document.getElementById('currency-select');
   if (currencySelect) {
-    currencySelect.addEventListener('change', (e) => {
-      currentRoom.currency = e.target.value;
-      saveRoom(currentRoom);
+    currencySelect.addEventListener('change', async (e) => {
+      const newCurrency = e.target.value;
+      const res = await apiUpdateCurrency(currentRoom.id, newCurrency);
+      if (res.success && res.room) {
+        currentRoom = res.room;
+      } else {
+        currentRoom.currency = newCurrency;
+        saveRoom(currentRoom);
+      }
       renderApp();
       showToast(`Currency changed to ${currentRoom.currency}`);
     });
   }
 
-  // Expense Search & Filter
   const searchInput = document.getElementById('expense-search-input');
   if (searchInput) {
     searchInput.addEventListener('input', (e) => {
@@ -694,14 +865,15 @@ function setupEventListeners() {
     });
   }
 
-  // Real-time input error clearing on member forms
   const memberInputs = [
     'new-member-name',
     'new-member-google-id',
     'new-member-phone',
     'edit-member-name',
     'edit-member-google-id',
-    'edit-member-phone'
+    'edit-member-phone',
+    'join-applicant-name',
+    'join-applicant-email'
   ];
 
   memberInputs.forEach(inputId => {
@@ -712,14 +884,45 @@ function setupEventListeners() {
       });
     }
   });
+
+  const disputeInput = document.getElementById('dispute-reason-notes');
+  if (disputeInput) {
+    disputeInput.addEventListener('input', () => {
+      const err = document.getElementById('dispute-reason-error');
+      if (err) {
+        err.innerText = '';
+        err.classList.remove('visible');
+      }
+    });
+  }
+
+  document.querySelectorAll('.modal-overlay').forEach(overlay => {
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        overlay.classList.remove('active');
+      }
+    });
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal-overlay.active').forEach(modal => {
+        modal.classList.remove('active');
+      });
+    }
+  });
 }
 
 // Modal Controllers
 export function openAddExpenseModal() {
+  if (currentRoom.status === 'COMPLETED' || currentRoom.status === 'DISCARDED') {
+    showToast('⚠️ Cannot add expenses to a completed trip.', 'info');
+    return;
+  }
+
   const modal = document.getElementById('add-expense-modal');
   if (!modal) return;
 
-  // Populate Category Grid
   const catGrid = document.getElementById('expense-category-grid');
   if (catGrid) {
     catGrid.innerHTML = Object.values(CATEGORIES).map(cat => `
@@ -730,7 +933,6 @@ export function openAddExpenseModal() {
     `).join('');
   }
 
-  // Populate Payer Select
   const payerSelect = document.getElementById('expense-payer-select');
   if (payerSelect) {
     payerSelect.innerHTML = currentRoom.members.map(m => `
@@ -738,7 +940,6 @@ export function openAddExpenseModal() {
     `).join('');
   }
 
-  // Set today's date
   const dateInput = document.getElementById('expense-date-input');
   if (dateInput && !dateInput.value) {
     dateInput.value = new Date().toISOString().split('T')[0];
@@ -842,7 +1043,12 @@ export function updateEqualSplitPreview() {
   }
 }
 
-export function saveExpense() {
+export async function saveExpense() {
+  if (currentRoom.status === 'COMPLETED' || currentRoom.status === 'DISCARDED') {
+    showToast('⚠️ Cannot add expenses to a completed room.', 'info');
+    return;
+  }
+
   const desc = document.getElementById('expense-desc-input')?.value?.trim();
   const amount = Number(document.getElementById('expense-amount-input')?.value) || 0;
   const payerId = document.getElementById('expense-payer-select')?.value;
@@ -922,48 +1128,69 @@ export function saveExpense() {
     notes: notes || ''
   };
 
-  currentRoom.expenses.push(newExpense);
-  saveRoom(currentRoom);
+  const res = await apiAddExpense(currentRoom.id, newExpense);
+  if (res.success && res.room) {
+    currentRoom = res.room;
+  } else {
+    currentRoom.expenses.push(newExpense);
+    await saveRoomAsync(currentRoom);
+  }
+
   closeModal('add-expense-modal');
   renderApp();
   showToast(`Added expense: "${desc}" (${formatCurrency(amount, currentRoom.currency)})`);
 
-  // Clear inputs
   document.getElementById('expense-desc-input').value = '';
   document.getElementById('expense-amount-input').value = '';
   document.getElementById('expense-notes-input').value = '';
 }
 
-export function deleteExpense(expenseId) {
+export async function deleteExpense(expenseId) {
   if (!expenseId) return;
 
-  const expIndex = currentRoom.expenses.findIndex(e => e.id === expenseId);
-  if (expIndex === -1) return;
+  const deletedExp = currentRoom.expenses.find(e => e.id === expenseId);
+  const desc = deletedExp?.description || 'Expense';
 
-  const deletedExp = currentRoom.expenses[expIndex];
-  currentRoom.expenses.splice(expIndex, 1);
-  saveRoom(currentRoom);
+  const res = await apiDeleteExpense(currentRoom.id, expenseId);
+  if (res.success && res.room) {
+    currentRoom = res.room;
+  } else {
+    const expIndex = currentRoom.expenses.findIndex(e => e.id === expenseId);
+    if (expIndex !== -1) {
+      currentRoom.expenses.splice(expIndex, 1);
+      await saveRoomAsync(currentRoom);
+    }
+  }
+
   renderApp();
-  showToast(`🗑️ Deleted expense "${deletedExp.description || 'Expense'}"`, 'info');
+  showToast(`🗑️ Deleted expense "${desc}"`, 'info');
 }
 
-export function deleteSettlement(settlementId) {
+export async function deleteSettlement(settlementId) {
   if (!settlementId) return;
 
-  const setIndex = currentRoom.settlements.findIndex(s => s.id === settlementId);
-  if (setIndex === -1) return;
+  const deletedSet = currentRoom.settlements.find(s => s.id === settlementId);
+  const amt = deletedSet ? deletedSet.amount : 0;
 
-  const deletedSet = currentRoom.settlements[setIndex];
-  currentRoom.settlements.splice(setIndex, 1);
-  saveRoom(currentRoom);
+  const res = await apiDeleteSettlement(currentRoom.id, settlementId);
+  if (res.success && res.room) {
+    currentRoom = res.room;
+  } else {
+    const setIndex = currentRoom.settlements.findIndex(s => s.id === settlementId);
+    if (setIndex !== -1) {
+      currentRoom.settlements.splice(setIndex, 1);
+      await saveRoomAsync(currentRoom);
+    }
+  }
+
   renderApp();
-  showToast(`🗑️ Settlement of ${formatCurrency(deletedSet.amount, currentRoom.currency)} removed`, 'info');
+  showToast(`🗑️ Settlement of ${formatCurrency(amt, currentRoom.currency)} removed`, 'info');
 }
-
 
 // Settlement Verification & Payment Flow
 export function openSettleModal(fromMemberId, toMemberId, defaultAmount) {
-  selectedSettlementTarget = { fromMemberId, toMemberId, defaultAmount: Number(defaultAmount) || 0 };
+  const numericAmount = Number(defaultAmount) || 0;
+  selectedSettlementTarget = { fromMemberId, toMemberId, defaultAmount: numericAmount };
   selectedPaymentMethod = 'UPI';
   currentUploadedProofBase64 = null;
 
@@ -974,25 +1201,22 @@ export function openSettleModal(fromMemberId, toMemberId, defaultAmount) {
   const toMember = currentRoom.members.find(m => m.id === toMemberId) || { name: 'Receiver', upiId: 'receiver@upi' };
   const currency = currentRoom.currency || 'USD';
 
-  // Set names & debt amounts
   document.getElementById('settle-from-name').innerText = fromMember.name;
   document.getElementById('settle-to-name').innerText = toMember.name;
-  document.getElementById('settle-expected-amount-display').innerText = formatCurrency(defaultAmount, currency);
-  document.getElementById('settle-expected-amount-val').innerText = formatCurrency(defaultAmount, currency);
+  document.getElementById('settle-expected-amount-display').innerText = formatCurrency(numericAmount, currency);
+  document.getElementById('settle-expected-amount-val').innerText = formatCurrency(numericAmount, currency);
 
   const amountInput = document.getElementById('settle-amount-input');
   if (amountInput) {
-    amountInput.value = defaultAmount.toFixed(2);
+    amountInput.value = numericAmount.toFixed(2);
   }
 
-  // Set receiver names in panels
   const bankRec = document.getElementById('settle-bank-receiver-name');
   if (bankRec) bankRec.innerText = toMember.name;
 
   const cashRec = document.getElementById('settle-cash-receiver-display');
   if (cashRec) cashRec.innerText = toMember.name;
 
-  // Reset proof upload elements
   const fileInput = document.getElementById('settle-proof-file-input');
   if (fileInput) fileInput.value = '';
 
@@ -1013,22 +1237,18 @@ export function openSettleModal(fromMemberId, toMemberId, defaultAmount) {
   const noteInput = document.getElementById('settle-note-input');
   if (noteInput) noteInput.value = `Settlement to ${toMember.name}`;
 
-  // Set today's date & current time
   const now = new Date();
   const dateInput = document.getElementById('settle-date-input');
   const timeInput = document.getElementById('settle-time-input');
   if (dateInput) dateInput.value = now.toISOString().split('T')[0];
   if (timeInput) timeInput.value = now.toTimeString().split(' ')[0].substring(0, 5);
 
-  // Validate amount mismatch banner
   validateSettleAmount();
 
-  // Reset payment method to UPI
   const upiRadio = document.querySelector('input[name="payment-method"][value="UPI"]');
   if (upiRadio) upiRadio.checked = true;
   onPaymentMethodChange('UPI');
 
-  // Update UPI QR Code preview
   updateSettlementQR(toMember, defaultAmount);
 
   modal.classList.add('active');
@@ -1037,7 +1257,6 @@ export function openSettleModal(fromMemberId, toMemberId, defaultAmount) {
 export function onPaymentMethodChange(method) {
   selectedPaymentMethod = method;
 
-  // Toggle panels
   const upiPanel = document.getElementById('settle-panel-upi');
   const bankPanel = document.getElementById('settle-panel-bank');
   const cashPanel = document.getElementById('settle-panel-cash');
@@ -1059,7 +1278,6 @@ export function onPaymentMethodChange(method) {
     }
   }
 
-  // Highlight card selector
   document.querySelectorAll('.method-selector-card').forEach(card => {
     const radio = card.querySelector('input[type="radio"]');
     card.style.borderColor = (radio && radio.value === method) ? 'var(--primary)' : 'var(--border-glass)';
@@ -1157,19 +1375,18 @@ function updateSettlementQR(toMember, amount) {
   }
 }
 
-export function submitSettlementProof() {
+export async function submitSettlementProof() {
   if (!selectedSettlementTarget) return;
 
   const amtCheck = validateSettleAmount();
   if (!amtCheck.valid) {
-    alert(`Payment amount ($${amtCheck.amount.toFixed(2)}) must match the outstanding debt ($${amtCheck.expected.toFixed(2)}).`);
+    alert(`Payment amount (${formatCurrency(amtCheck.amount, currentRoom.currency)}) must match the outstanding debt (${formatCurrency(amtCheck.expected, currentRoom.currency)}).`);
     return;
   }
 
   const amount = amtCheck.amount;
   const isCash = selectedPaymentMethod === 'CASH';
 
-  // Digital payments require proof screenshot
   if (!isCash && !currentUploadedProofBase64) {
     const proofErr = document.getElementById('settle-proof-error');
     if (proofErr) {
@@ -1214,8 +1431,14 @@ export function submitSettlementProof() {
     disputeNotes: null
   };
 
-  currentRoom.settlements.push(newSettlement);
-  saveRoom(currentRoom);
+  const res = await apiAddSettlement(currentRoom.id, newSettlement);
+  if (res.success && res.room) {
+    currentRoom = res.room;
+  } else {
+    currentRoom.settlements.push(newSettlement);
+    await saveRoomAsync(currentRoom);
+  }
+
   closeModal('settle-modal');
   renderApp();
 
@@ -1239,7 +1462,6 @@ export function openReviewSettlementModal(settlementId) {
   const toMember = currentRoom.members.find(m => m.id === set.toMemberId) || { name: 'Receiver' };
   const currency = set.currency || currentRoom.currency || 'USD';
 
-  // Status Badge
   const badgeContainer = document.getElementById('review-status-badge-container');
   if (badgeContainer) {
     const status = set.status || 'CONFIRMED';
@@ -1260,7 +1482,6 @@ export function openReviewSettlementModal(settlementId) {
   document.getElementById('review-method-val').innerText = set.paymentMethod;
   document.getElementById('review-date-val').innerText = set.timestamp ? new Date(set.timestamp).toLocaleString() : 'Recent';
 
-  // Txn ID
   const txnRow = document.getElementById('review-txn-row');
   const txnVal = document.getElementById('review-txn-val');
   if (set.transactionId || set.upiTxnId) {
@@ -1270,11 +1491,9 @@ export function openReviewSettlementModal(settlementId) {
     if (txnRow) txnRow.style.display = 'none';
   }
 
-  // Note
   const noteVal = document.getElementById('review-note-val');
   if (noteVal) noteVal.innerText = set.referenceNote || 'None';
 
-  // Cash vs Digital Preview
   const proofContainer = document.getElementById('review-proof-container');
   const cashPrompt = document.getElementById('review-cash-prompt');
   const cashAmountVal = document.getElementById('review-cash-amount-val');
@@ -1297,27 +1516,35 @@ export function openReviewSettlementModal(settlementId) {
   modal.classList.add('active');
 }
 
-export function confirmReceiverSettlementAction() {
+export async function confirmReceiverSettlementAction() {
   if (!activeReviewSettlementId) return;
 
   const set = currentRoom.settlements.find(s => s.id === activeReviewSettlementId);
   if (!set) return;
 
   const receiver = currentRoom.members.find(m => m.id === set.toMemberId);
+  const confirmedBy = receiver ? receiver.name : 'Receiver';
 
-  set.status = 'CONFIRMED';
-  set.confirmedAt = new Date().toISOString();
-  set.confirmedBy = receiver ? receiver.name : 'Receiver';
+  const res = await apiUpdateSettlement(currentRoom.id, set.id, {
+    status: 'CONFIRMED',
+    confirmedBy: confirmedBy
+  });
 
-  saveRoom(currentRoom);
+  if (res.success && res.room) {
+    currentRoom = res.room;
+  } else {
+    set.status = 'CONFIRMED';
+    set.confirmedAt = new Date().toISOString();
+    set.confirmedBy = confirmedBy;
+    await saveRoomAsync(currentRoom);
+  }
+
   closeModal('review-settlement-modal');
 
-  // Trigger celebration!
   triggerConfetti({ particleCount: 140 });
   renderApp();
   showToast(`🎉 Settlement of ${formatCurrency(set.amount, currentRoom.currency)} confirmed & cleared!`);
 
-  // Open official receipt
   viewReceipt(set.id);
 }
 
@@ -1327,7 +1554,7 @@ export function openRejectModalFromReview() {
   if (modal) modal.classList.add('active');
 }
 
-export function submitSettlementRejection() {
+export async function submitSettlementRejection() {
   if (!activeReviewSettlementId) return;
 
   const set = currentRoom.settlements.find(s => s.id === activeReviewSettlementId);
@@ -1336,12 +1563,22 @@ export function submitSettlementRejection() {
   const selectedReason = document.querySelector('input[name="rejection-reason-radio"]:checked')?.value || 'Payment not received';
   const notes = document.getElementById('reject-reason-notes')?.value?.trim();
 
-  set.status = 'REJECTED';
-  set.rejectionReason = selectedReason;
-  set.rejectionNotes = notes || '';
-  set.rejectedAt = new Date().toISOString();
+  const res = await apiUpdateSettlement(currentRoom.id, set.id, {
+    status: 'REJECTED',
+    rejectionReason: selectedReason,
+    rejectionNotes: notes || ''
+  });
 
-  saveRoom(currentRoom);
+  if (res.success && res.room) {
+    currentRoom = res.room;
+  } else {
+    set.status = 'REJECTED';
+    set.rejectionReason = selectedReason;
+    set.rejectionNotes = notes || '';
+    set.rejectedAt = new Date().toISOString();
+    await saveRoomAsync(currentRoom);
+  }
+
   closeModal('reject-settlement-modal');
   renderApp();
   showToast(`❌ Payment claim rejected (${selectedReason}). Debt remains unsettled.`, 'info');
@@ -1362,7 +1599,7 @@ export function openDisputeModalFromReview() {
   }
 }
 
-export function submitSettlementDispute() {
+export async function submitSettlementDispute() {
   if (!activeReviewSettlementId) return;
 
   const set = currentRoom.settlements.find(s => s.id === activeReviewSettlementId);
@@ -1378,11 +1615,20 @@ export function submitSettlementDispute() {
     return;
   }
 
-  set.status = 'DISPUTED';
-  set.disputeNotes = notes;
-  set.disputedAt = new Date().toISOString();
+  const res = await apiUpdateSettlement(currentRoom.id, set.id, {
+    status: 'DISPUTED',
+    disputeNotes: notes
+  });
 
-  saveRoom(currentRoom);
+  if (res.success && res.room) {
+    currentRoom = res.room;
+  } else {
+    set.status = 'DISPUTED';
+    set.disputeNotes = notes;
+    set.disputedAt = new Date().toISOString();
+    await saveRoomAsync(currentRoom);
+  }
+
   closeModal('dispute-settlement-modal');
   renderApp();
   showToast(`⚠️ Settlement flagged as disputed for group review.`, 'info');
@@ -1485,6 +1731,11 @@ export function clearAllMemberErrors(prefix = 'new-member') {
 
 // Member Management Modals
 export function openAddMemberModal() {
+  if (currentRoom.status === 'COMPLETED' || currentRoom.status === 'DISCARDED') {
+    showToast('⚠️ Cannot add members to a completed room.', 'info');
+    return;
+  }
+
   const modal = document.getElementById('add-member-modal');
   if (!modal) return;
 
@@ -1500,7 +1751,6 @@ export function openAddMemberModal() {
   if (phoneInput) phoneInput.value = '';
   if (upiInput) upiInput.value = '';
 
-  // Render color choices
   const colorPicker = document.getElementById('member-color-picker');
   if (colorPicker) {
     colorPicker.innerHTML = AVATAR_COLORS.map((col, i) => `
@@ -1519,7 +1769,7 @@ export function selectMemberColor(color, element) {
   if (element) element.style.borderColor = '#ffffff';
 }
 
-export function saveNewMember() {
+export async function saveNewMember() {
   clearAllMemberErrors('new-member');
 
   const rawName = document.getElementById('new-member-name')?.value || '';
@@ -1555,13 +1805,19 @@ export function saveNewMember() {
     name: nameVal.value,
     googleId: googleIdVal.value,
     phoneNumber: phoneVal.value,
-    phone: phoneVal.value, // Backward compatibility alias
+    phone: phoneVal.value,
     avatarColor: window.selectedNewMemberColor || AVATAR_COLORS[0],
     upiId: upi || `${nameVal.value.toLowerCase().replace(/[^a-z0-9]/g, '')}@upi`
   };
 
-  currentRoom.members.push(newMember);
-  saveRoom(currentRoom);
+  const res = await apiAddMember(currentRoom.id, newMember);
+  if (res.success && res.room) {
+    currentRoom = res.room;
+  } else {
+    currentRoom.members.push(newMember);
+    await saveRoomAsync(currentRoom);
+  }
+
   closeModal('add-member-modal');
   renderApp();
   showToast(`Added friend: ${newMember.name}`);
@@ -1591,7 +1847,7 @@ export function openEditMemberModal(memberId) {
   modal.classList.add('active');
 }
 
-export function saveEditMember() {
+export async function saveEditMember() {
   const modal = document.getElementById('edit-member-modal');
   const memberId = window.editingMemberId || modal?.dataset?.memberId;
   const member = currentRoom.members.find(m => m.id === memberId);
@@ -1627,19 +1883,33 @@ export function saveEditMember() {
     return;
   }
 
-  member.name = nameVal.value;
-  member.googleId = googleIdVal.value;
-  member.phoneNumber = phoneVal.value;
-  member.phone = phoneVal.value; // Backward compatibility alias
-  member.upiId = upi;
+  const updatedData = {
+    name: nameVal.value,
+    googleId: googleIdVal.value,
+    email: googleIdVal.value,
+    phoneNumber: phoneVal.value,
+    phone: phoneVal.value,
+    upiId: upi
+  };
 
-  saveRoom(currentRoom);
+  const res = await apiUpdateMember(currentRoom.id, memberId, updatedData);
+  if (res.success && res.room) {
+    currentRoom = res.room;
+  } else {
+    member.name = nameVal.value;
+    member.googleId = googleIdVal.value;
+    member.phoneNumber = phoneVal.value;
+    member.phone = phoneVal.value;
+    member.upiId = upi;
+    await saveRoomAsync(currentRoom);
+  }
+
   closeModal('edit-member-modal');
   renderApp();
-  showToast(`Updated profile for ${member.name}`);
+  showToast(`Updated profile for ${nameVal.value}`);
 }
 
-export function deleteMember() {
+export async function deleteMember() {
   const modal = document.getElementById('edit-member-modal');
   const memberId = window.editingMemberId || modal?.dataset?.memberId;
   if (!memberId) return;
@@ -1652,38 +1922,52 @@ export function deleteMember() {
   const member = currentRoom.members.find(m => m.id === memberId);
   const memberName = member ? member.name : 'Member';
 
-  // 1. Remove member from list
-  currentRoom.members = currentRoom.members.filter(m => m.id !== memberId);
+  const res = await apiDeleteMember(currentRoom.id, memberId);
+  if (res.success && res.room) {
+    currentRoom = res.room;
+  } else if (!res.success && res.error && !res.offline) {
+    showToast(`⚠️ ${res.error}`, 'info');
+    return;
+  } else {
+    currentRoom.members = currentRoom.members.filter(m => m.id !== memberId);
 
-  // 2. Clean up member's splits from expenses
-  currentRoom.expenses.forEach(exp => {
-    if (exp.splits && exp.splits[memberId]) {
-      delete exp.splits[memberId];
-    }
-  });
+    currentRoom.expenses.forEach(exp => {
+      if (exp.splits && exp.splits[memberId] !== undefined) {
+        delete exp.splits[memberId];
+        const remainingParticipantIds = Object.keys(exp.splits);
+        if (remainingParticipantIds.length > 0 && exp.splitType === 'EQUAL') {
+          const perPerson = Math.round((Number(exp.amount) / remainingParticipantIds.length) * 100) / 100;
+          remainingParticipantIds.forEach(id => {
+            exp.splits[id] = perPerson;
+          });
+        }
+      }
+    });
 
-  // 3. Reassign payer if deleted member was payer
-  const remainingHostId = currentRoom.members[0]?.id;
-  currentRoom.expenses.forEach(exp => {
-    if (exp.payerId === memberId) {
-      exp.payerId = remainingHostId;
-    }
-  });
+    const remainingHostId = currentRoom.members[0]?.id;
+    currentRoom.expenses.forEach(exp => {
+      if (exp.payerId === memberId) {
+        exp.payerId = remainingHostId;
+      }
+    });
 
-  // 4. Clean up settlements involving deleted member
-  currentRoom.settlements = currentRoom.settlements.filter(s => s.fromMemberId !== memberId && s.toMemberId !== memberId);
+    currentRoom.settlements = currentRoom.settlements.filter(s => s.fromMemberId !== memberId && s.toMemberId !== memberId);
+    await saveRoomAsync(currentRoom);
+  }
 
-  saveRoom(currentRoom);
   closeModal('edit-member-modal');
   renderApp();
   showToast(`🗑️ Removed ${memberName} from room`, 'info');
 }
 
-// Room Sharing & Creation
+/* =========================================================================
+   Share Room, Real URLs & Native Share
+   ========================================================================= */
+
 export function copyRoomLink() {
-  const url = window.location.href;
+  const url = getShareableRoomUrl(currentRoom.id);
   navigator.clipboard.writeText(url).then(() => {
-    showToast(`📋 Room link copied to clipboard! (Room: ${currentRoom.id})`);
+    showToast(`📋 Room join link copied to clipboard! (Room: ${currentRoom.id})`);
   }).catch(() => {
     prompt('Copy this room link:', url);
   });
@@ -1693,67 +1977,445 @@ export function openShareRoomModal() {
   const modal = document.getElementById('share-room-modal');
   if (!modal) return;
 
+  const shareUrl = getShareableRoomUrl(currentRoom.id);
   document.getElementById('share-room-id-display').innerText = currentRoom.id;
-  document.getElementById('share-room-url-input').value = window.location.href;
+  document.getElementById('share-room-url-input').value = shareUrl;
+
+  const nativeBtn = document.getElementById('share-room-native-btn');
+  if (nativeBtn) {
+    nativeBtn.style.display = navigator.share ? 'inline-flex' : 'none';
+  }
 
   const canvas = document.getElementById('share-room-qr-canvas');
   if (canvas) {
-    generateQRCodeCanvas(canvas, window.location.href, {
+    generateQRCodeCanvas(canvas, shareUrl, {
       size: 200,
       colorDark: '#0f172a',
-      logoText: 'ROOM'
+      logoText: 'JOIN'
     });
   }
 
   modal.classList.add('active');
 }
 
-export function openCreateRoomModal() {
+export async function shareRoomNative() {
+  const shareUrl = getShareableRoomUrl(currentRoom.id);
+  if (navigator.share) {
+    try {
+      await navigator.share({
+        title: `Join ${currentRoom.name || 'Trip Group'} on Settle Up`,
+        text: `Hey! Join our trip '${currentRoom.name}' on Settle Up to track expenses and split bills:`,
+        url: shareUrl
+      });
+      showToast('📤 Invite shared successfully!');
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        copyRoomLink();
+      }
+    }
+  } else {
+    copyRoomLink();
+  }
+}
+
+/* =========================================================================
+   Join Room Landing & Request System
+   ========================================================================= */
+
+export async function openJoinRoomModal(roomId) {
+  targetJoinRoomId = (roomId || 'GOA2026').toUpperCase();
+  const modal = document.getElementById('join-room-modal');
+  if (!modal) return;
+
+  const previewName = document.getElementById('join-preview-name');
+  const previewId = document.getElementById('join-preview-id');
+  const previewMembers = document.getElementById('join-preview-members');
+  const previewStatus = document.getElementById('join-preview-status');
+
+  const stateAlready = document.getElementById('join-state-already-member');
+  const stateClosed = document.getElementById('join-state-closed');
+  const statePending = document.getElementById('join-state-pending');
+  const stateForm = document.getElementById('join-state-form');
+
+  // Reset states
+  if (stateAlready) stateAlready.style.display = 'none';
+  if (stateClosed) stateClosed.style.display = 'none';
+  if (statePending) statePending.style.display = 'none';
+  if (stateForm) stateForm.style.display = 'block';
+
+  // Fetch safe public preview
+  const publicInfo = await apiGetRoomPublic(targetJoinRoomId);
+  if (!publicInfo) {
+    if (stateForm) stateForm.style.display = 'none';
+    if (stateClosed) {
+      stateClosed.style.display = 'block';
+      stateClosed.querySelector('h4').innerText = 'Room Not Found';
+      stateClosed.querySelector('p').innerText = 'The room ID specified does not exist or was deleted.';
+    }
+    modal.classList.add('active');
+    return;
+  }
+
+  if (previewName) previewName.innerText = publicInfo.name;
+  if (previewId) previewId.innerText = publicInfo.id;
+  if (previewMembers) previewMembers.innerText = publicInfo.memberCount;
+  if (previewStatus) {
+    previewStatus.innerText = publicInfo.status;
+    previewStatus.className = `room-status-pill ${publicInfo.status === 'COMPLETED' ? 'status-pill-completed' : 'status-pill-active'}`;
+  }
+
+  // Pre-fill from local profile memory
+  const savedProfile = getUserProfile();
+  if (savedProfile) {
+    const nameInput = document.getElementById('join-applicant-name');
+    const emailInput = document.getElementById('join-applicant-email');
+    const phoneInput = document.getElementById('join-applicant-phone');
+    const upiInput = document.getElementById('join-applicant-upi');
+    if (nameInput && !nameInput.value) nameInput.value = savedProfile.name || '';
+    if (emailInput && !emailInput.value) emailInput.value = savedProfile.email || '';
+    if (phoneInput && !phoneInput.value) phoneInput.value = savedProfile.phone || '';
+    if (upiInput && !upiInput.value) upiInput.value = savedProfile.upiId || '';
+  }
+
+  // Check if current room matches and user is already a member
+  if (currentRoom && currentRoom.id === targetJoinRoomId) {
+    const userEmail = savedProfile?.email?.toLowerCase();
+    const isMember = currentRoom.members.some(m => (m.googleId || '').toLowerCase() === userEmail);
+    if (isMember) {
+      if (stateForm) stateForm.style.display = 'none';
+      if (stateAlready) stateAlready.style.display = 'block';
+    }
+  }
+
+  if (publicInfo.status !== 'ACTIVE') {
+    if (stateForm) stateForm.style.display = 'none';
+    if (stateClosed) stateClosed.style.display = 'block';
+  }
+
+  modal.classList.add('active');
+}
+
+export function enterRoomFromJoinModal() {
+  closeModal('join-room-modal');
+  if (targetJoinRoomId) {
+    switchRoom(targetJoinRoomId);
+  }
+}
+
+export async function submitJoinRequestAction() {
+  if (!targetJoinRoomId) return;
+
+  const rawName = document.getElementById('join-applicant-name')?.value || '';
+  const rawEmail = document.getElementById('join-applicant-email')?.value || '';
+  const phone = document.getElementById('join-applicant-phone')?.value?.trim();
+  const upi = document.getElementById('join-applicant-upi')?.value?.trim();
+
+  clearFieldError('join-applicant-name');
+  clearFieldError('join-applicant-email');
+
+  const nameVal = validateMemberName(rawName);
+  const emailVal = validateGoogleId(rawEmail);
+
+  let hasError = false;
+  if (!nameVal.valid) {
+    setFieldError('join-applicant-name', nameVal.message);
+    hasError = true;
+  }
+  if (!emailVal.valid) {
+    setFieldError('join-applicant-email', emailVal.message);
+    hasError = true;
+  }
+
+  if (hasError) return;
+
+  // Save profile to local memory
+  saveUserProfile({
+    name: nameVal.value,
+    email: emailVal.value,
+    phone: phone || '',
+    upiId: upi || ''
+  });
+
+  const res = await apiSubmitJoinRequest(targetJoinRoomId, {
+    applicantName: nameVal.value,
+    applicantEmail: emailVal.value,
+    applicantPhone: phone || '',
+    applicantUpi: upi || ''
+  });
+
+  if (res.success) {
+    const stateForm = document.getElementById('join-state-form');
+    const statePending = document.getElementById('join-state-pending');
+    if (stateForm) stateForm.style.display = 'none';
+    if (statePending) statePending.style.display = 'block';
+    showToast(`📬 Request to join Room ${targetJoinRoomId} submitted! Waiting for host approval.`);
+  } else {
+    alert(res.error);
+  }
+}
+
+/* =========================================================================
+   Upgraded Room Hub (Active, Find Groups, Join Requests, Archived, Create)
+   ========================================================================= */
+
+export async function openCreateRoomModal() {
   const modal = document.getElementById('create-room-modal');
   if (!modal) return;
 
   document.getElementById('new-room-id-input').value = generateRoomId('TRIP');
   document.getElementById('new-room-name-input').value = 'Weekend Getaway';
 
-  // Render list of previously saved rooms
-  renderSavedRoomsList();
+  switchHubTab('active');
   modal.classList.add('active');
 }
 
-export function renderSavedRoomsList() {
+export function switchHubTab(tabName) {
+  activeHubTab = tabName;
+
+  document.querySelectorAll('.hub-tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.hubtab === tabName);
+  });
+
+  const activeView = document.getElementById('hub-tab-view-active');
+  const searchView = document.getElementById('hub-tab-view-search');
+  const requestsView = document.getElementById('hub-tab-view-requests');
+  const archivedView = document.getElementById('hub-tab-view-archived');
+  const createView = document.getElementById('hub-tab-view-create');
+
+  if (activeView) activeView.style.display = tabName === 'active' ? 'block' : 'none';
+  if (searchView) searchView.style.display = tabName === 'search' ? 'block' : 'none';
+  if (requestsView) requestsView.style.display = tabName === 'requests' ? 'block' : 'none';
+  if (archivedView) archivedView.style.display = tabName === 'archived' ? 'block' : 'none';
+  if (createView) createView.style.display = tabName === 'create' ? 'block' : 'none';
+
+  if (tabName === 'active') renderSavedRoomsList();
+  if (tabName === 'archived') renderArchivedRoomsList();
+  if (tabName === 'requests') refreshJoinRequestsList();
+}
+
+export async function renderSavedRoomsList() {
   const savedList = document.getElementById('saved-rooms-list');
   if (!savedList) return;
 
-  const rooms = listSavedRooms();
-  if (rooms.length === 0) {
-    savedList.innerHTML = `<div style="font-size: 0.8rem; color: var(--text-muted); padding: 0.5rem 0;">No other saved rooms found.</div>`;
+  const rooms = await listSavedRoomsAsync('ACTIVE');
+  if (!rooms || rooms.length === 0) {
+    savedList.innerHTML = `<div style="font-size: 0.8rem; color: var(--text-muted); padding: 1rem 0; text-align: center;">No active trips found. Use "Find a Group" or "Create New" above.</div>`;
     return;
   }
 
   savedList.innerHTML = rooms.map(r => `
-    <div class="glass-card-elevated" style="display: flex; align-items: center; justify-content: space-between; padding: 0.65rem 0.85rem; margin-bottom: 0.4rem;">
+    <div class="glass-card-elevated" style="display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; margin-bottom: 0.5rem;">
       <div>
-        <div style="font-weight: 700; font-size: 0.85rem;">${escapeHtml(r.name)}</div>
-        <div style="font-size: 0.72rem; color: var(--text-muted);">${r.id} • ${r.memberCount} members • ${r.expenseCount} expenses</div>
+        <div style="display: flex; align-items: center; gap: 0.4rem;">
+          <span style="font-weight: 700; font-size: 0.9rem;">${escapeHtml(r.name)}</span>
+          <span class="room-status-pill status-pill-active" style="font-size: 0.65rem;">ACTIVE</span>
+        </div>
+        <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">
+          <span class="font-mono" style="color: var(--primary-light); font-weight: 600;">${r.id}</span> • ${r.memberCount || 0} members • ${r.expenseCount || 0} expenses • ${r.currency || 'USD'}
+        </div>
       </div>
       <div style="display: flex; gap: 0.4rem;">
-        <button class="btn btn-secondary btn-sm" onclick="window.app.switchRoom('${r.id}')">Open</button>
+        <button class="btn ${r.id === currentRoom.id ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="window.app.switchRoom('${r.id}')">
+          ${r.id === currentRoom.id ? 'Current' : 'Open'}
+        </button>
         ${r.id !== currentRoom.id ? `
-          <button class="btn btn-secondary btn-sm" style="color: #f87171;" onclick="window.app.deleteSavedRoomHandler('${r.id}')" title="Delete room">🗑️</button>
+          <button class="btn btn-secondary btn-sm" style="color: #f59e0b;" onclick="window.app.deleteSavedRoomHandler('${r.id}')" title="Archive room">📦</button>
         ` : ''}
       </div>
     </div>
   `).join('');
 }
 
-export function deleteSavedRoomHandler(roomId) {
-  if (!roomId || roomId === currentRoom.id) return;
-  deleteSavedRoom(roomId);
-  renderSavedRoomsList();
-  showToast(`Room ${roomId} deleted from storage`, 'info');
+export async function renderArchivedRoomsList() {
+  const archivedList = document.getElementById('archived-rooms-list');
+  if (!archivedList) return;
+
+  const rooms = await listSavedRoomsAsync('ARCHIVED');
+  if (!rooms || rooms.length === 0) {
+    archivedList.innerHTML = `<div style="font-size: 0.8rem; color: var(--text-muted); padding: 1.5rem 0; text-align: center;">No archived or completed trips found.</div>`;
+    return;
+  }
+
+  archivedList.innerHTML = rooms.map(r => `
+    <div class="glass-card-elevated" style="display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; margin-bottom: 0.5rem;">
+      <div>
+        <div style="display: flex; align-items: center; gap: 0.4rem;">
+          <span style="font-weight: 700; font-size: 0.9rem;">${escapeHtml(r.name)}</span>
+          <span class="room-status-pill ${r.status === 'COMPLETED' ? 'status-pill-completed' : 'status-pill-archived'}" style="font-size: 0.65rem;">
+            ${r.status || 'ARCHIVED'}
+          </span>
+        </div>
+        <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">
+          <span class="font-mono">${r.id}</span> • ${r.memberCount || 0} members • ${r.expenseCount || 0} expenses
+        </div>
+      </div>
+      <div style="display: flex; gap: 0.4rem;">
+        <button class="btn btn-secondary btn-sm" onclick="window.app.switchRoom('${r.id}')">View History</button>
+        <button class="btn btn-emerald btn-sm" onclick="window.app.restoreSavedRoomHandler('${r.id}')" title="Restore to Active">🔄 Restore</button>
+      </div>
+    </div>
+  `).join('');
 }
 
-export function confirmCreateRoom() {
+export function onGroupSearchInput(event) {
+  const query = event?.target?.value || '';
+  if (groupSearchDebounceTimer) clearTimeout(groupSearchDebounceTimer);
+
+  groupSearchDebounceTimer = setTimeout(async () => {
+    const results = await apiSearchRooms(query);
+    renderGroupSearchResults(results, query);
+  }, 250);
+}
+
+function renderGroupSearchResults(results, query) {
+  const container = document.getElementById('group-search-results');
+  if (!container) return;
+
+  if (!query || !query.trim()) {
+    container.innerHTML = `
+      <div style="text-align: center; color: var(--text-muted); padding: 1.5rem 0; font-size: 0.85rem;">
+        Type a group name or room ID above to search active trips.
+      </div>
+    `;
+    return;
+  }
+
+  if (!results || results.length === 0) {
+    container.innerHTML = `
+      <div style="text-align: center; color: var(--text-muted); padding: 1.5rem 0; font-size: 0.85rem;">
+        No active groups matching "<strong>${escapeHtml(query)}</strong>" found.
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = results.map(r => `
+    <div class="group-search-card">
+      <div>
+        <div style="font-weight: 700; font-size: 0.9rem;">${escapeHtml(r.name)}</div>
+        <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">
+          <span class="font-mono" style="color: var(--primary-light); font-weight: 600;">${r.id}</span> • 👥 ${r.memberCount} Members • Currency: ${r.currency || 'USD'}
+        </div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="window.app.openJoinRoomModal('${r.id}')">
+        ➕ Request to Join
+      </button>
+    </div>
+  `).join('');
+}
+
+export async function refreshJoinRequestsList() {
+  const listEl = document.getElementById('join-requests-list');
+  const roomNameEl = document.getElementById('hub-current-room-name');
+  if (roomNameEl) roomNameEl.innerText = currentRoom.name || currentRoom.id;
+  if (!listEl) return;
+
+  const requests = await apiListJoinRequests(currentRoom.id);
+  checkPendingJoinRequestsCount(requests);
+
+  if (!requests || requests.length === 0) {
+    listEl.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 1.5rem 0; font-size: 0.85rem;">No join requests for this room yet.</div>`;
+    return;
+  }
+
+  listEl.innerHTML = requests.map(req => {
+    const isPending = req.status === 'PENDING';
+    const isAccepted = req.status === 'ACCEPTED';
+    const dateStr = req.createdAt ? new Date(req.createdAt).toLocaleDateString() : '';
+
+    return `
+      <div class="join-request-card">
+        <div>
+          <div style="display: flex; align-items: center; gap: 0.4rem;">
+            <strong style="font-size: 0.9rem;">${escapeHtml(req.applicantName)}</strong>
+            <span class="status-badge ${isPending ? 'status-badge-awaiting' : isAccepted ? 'status-badge-confirmed' : 'status-badge-rejected'}" style="font-size: 0.65rem;">
+              ${req.status}
+            </span>
+          </div>
+          <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">
+            <span>📧 ${escapeHtml(req.applicantEmail)}</span>
+            ${req.applicantPhone ? `<span> • 📞 ${escapeHtml(req.applicantPhone)}</span>` : ''}
+            ${req.applicantUpi ? `<span> • 📱 ${escapeHtml(req.applicantUpi)}</span>` : ''}
+            <span> • ${dateStr}</span>
+          </div>
+        </div>
+
+        ${isPending ? `
+          <div style="display: flex; gap: 0.4rem;">
+            <button class="btn btn-emerald btn-sm" onclick="window.app.acceptJoinRequestAction('${req.id}')">
+              ✅ Accept
+            </button>
+            <button class="btn btn-secondary btn-sm" style="color: #f87171;" onclick="window.app.rejectJoinRequestAction('${req.id}')">
+              ❌ Reject
+            </button>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+export async function acceptJoinRequestAction(requestId) {
+  const res = await apiProcessJoinRequest(currentRoom.id, requestId, 'ACCEPT', 'Host');
+  if (res.success && res.room) {
+    currentRoom = res.room;
+    renderApp();
+    refreshJoinRequestsList();
+    triggerConfetti({ particleCount: 60 });
+    showToast(`✅ Member added to room!`);
+  } else {
+    alert(res.error || 'Failed to accept request');
+  }
+}
+
+export async function rejectJoinRequestAction(requestId) {
+  const res = await apiProcessJoinRequest(currentRoom.id, requestId, 'REJECT', 'Host');
+  if (res.success && res.room) {
+    currentRoom = res.room;
+    refreshJoinRequestsList();
+    showToast(`❌ Join request rejected`, 'info');
+  } else {
+    alert(res.error || 'Failed to reject request');
+  }
+}
+
+export async function checkPendingJoinRequestsCount(preloadedRequests = null) {
+  if (!currentRoom || !currentRoom.id) return;
+  const requests = preloadedRequests || await apiListJoinRequests(currentRoom.id);
+  const pendingCount = requests.filter(r => r.status === 'PENDING').length;
+
+  const headerBadge = document.getElementById('hub-pending-badge');
+  const hubTabBadge = document.getElementById('hub-requests-badge');
+
+  if (headerBadge) {
+    headerBadge.innerText = pendingCount;
+    headerBadge.style.display = pendingCount > 0 ? 'inline-block' : 'none';
+  }
+  if (hubTabBadge) {
+    hubTabBadge.innerText = pendingCount;
+    hubTabBadge.style.display = pendingCount > 0 ? 'inline-block' : 'none';
+  }
+}
+
+export async function deleteSavedRoomHandler(roomId) {
+  if (!roomId || roomId === currentRoom.id) return;
+  await deleteSavedRoomAsync(roomId, false);
+  await renderSavedRoomsList();
+  showToast(`Room ${roomId} moved to Archived Rooms`, 'info');
+}
+
+export async function restoreSavedRoomHandler(roomId) {
+  if (!roomId) return;
+  const res = await apiRestoreRoom(roomId);
+  if (res.success) {
+    await renderArchivedRoomsList();
+    showToast(`Room ${roomId} restored to Active!`);
+  } else {
+    alert(res.error);
+  }
+}
+
+export async function confirmCreateRoom() {
   const roomId = document.getElementById('new-room-id-input')?.value?.trim().toUpperCase();
   const roomName = document.getElementById('new-room-name-input')?.value?.trim();
 
@@ -1766,40 +2428,88 @@ export function confirmCreateRoom() {
     id: roomId,
     name: roomName || `Room #${roomId}`,
     currency: 'USD',
+    status: 'ACTIVE',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     members: [
-      { id: 'mem_1', name: 'Alice', googleId: 'alice@gmail.com', phoneNumber: '+1-555-0101', phone: '+1-555-0101', avatarColor: '#6366f1', upiId: 'alice@upi' },
-      { id: 'mem_2', name: 'Bob', googleId: 'bob@gmail.com', phoneNumber: '+1-555-0102', phone: '+1-555-0102', avatarColor: '#10b981', upiId: 'bob@upi' },
-      { id: 'mem_3', name: 'Charlie', googleId: 'charlie@gmail.com', phoneNumber: '+1-555-0103', phone: '+1-555-0103', avatarColor: '#ec4899', upiId: 'charlie@upi' }
+      { id: `${roomId}_mem_1`, name: 'Alice', googleId: 'alice@gmail.com', phoneNumber: '+1-555-0101', phone: '+1-555-0101', avatarColor: '#6366f1', upiId: 'alice@upi' },
+      { id: `${roomId}_mem_2`, name: 'Bob', googleId: 'bob@gmail.com', phoneNumber: '+1-555-0102', phone: '+1-555-0102', avatarColor: '#10b981', upiId: 'bob@upi' },
+      { id: `${roomId}_mem_3`, name: 'Charlie', googleId: 'charlie@gmail.com', phoneNumber: '+1-555-0103', phone: '+1-555-0103', avatarColor: '#ec4899', upiId: 'charlie@upi' }
     ],
     expenses: [],
     settlements: []
   };
 
-  saveRoom(newRoom);
-  currentRoom = newRoom;
+  currentRoom = await saveRoomAsync(newRoom);
   setUrlRoomId(newRoom.id);
   closeModal('create-room-modal');
   renderApp();
   showToast(`Created new room: ${newRoom.name}`);
 }
 
-export function switchRoom(roomId) {
-  currentRoom = loadRoom(roomId);
+export async function switchRoom(roomId) {
+  currentRoom = await loadRoomAsync(roomId);
   setUrlRoomId(currentRoom.id);
   closeModal('create-room-modal');
   renderApp();
   showToast(`Switched to Room ${currentRoom.id}`);
 }
 
-export function loadSamplePreset() {
-  currentRoom = createSampleRoom('GOA2026');
-  saveRoom(currentRoom);
+export async function loadSamplePreset() {
+  currentRoom = await resetSampleRoomAsync('GOA2026');
   setUrlRoomId('GOA2026');
   renderApp();
   triggerConfetti({ particleCount: 80 });
   showToast('🌴 Loaded sample "Goa Beach Vacation 2026"!');
+}
+
+/* =========================================================================
+   Room Lifecycle Actions (Close, Discard, Restore)
+   ========================================================================= */
+
+export function openCloseRoomModal() {
+  const modal = document.getElementById('close-room-confirm-modal');
+  if (modal) modal.classList.add('active');
+}
+
+export async function confirmCloseRoomAction() {
+  closeModal('close-room-confirm-modal');
+  const res = await apiUpdateRoomStatus(currentRoom.id, 'COMPLETED');
+  if (res.success && res.room) {
+    currentRoom = res.room;
+    renderApp();
+    showToast(`🔒 Trip closed and marked as Completed.`);
+  } else {
+    alert(res.error);
+  }
+}
+
+export function openDiscardRoomModal() {
+  const modal = document.getElementById('discard-room-confirm-modal');
+  if (modal) modal.classList.add('active');
+}
+
+export async function confirmDiscardRoomAction() {
+  closeModal('discard-room-confirm-modal');
+  const res = await apiUpdateRoomStatus(currentRoom.id, 'DISCARDED');
+  if (res.success && res.room) {
+    currentRoom = res.room;
+    renderApp();
+    showToast(`📦 Trip moved to Archived Rooms.`);
+  } else {
+    alert(res.error);
+  }
+}
+
+export async function restoreCurrentRoom() {
+  const res = await apiRestoreRoom(currentRoom.id);
+  if (res.success && res.room) {
+    currentRoom = res.room;
+    renderApp();
+    showToast(`🔄 Trip restored to Active!`);
+  } else {
+    alert(res.error);
+  }
 }
 
 export function closeModal(modalId) {
@@ -1847,18 +2557,36 @@ window.app = {
   saveEditMember,
   deleteMember,
   deleteSavedRoomHandler,
+  restoreSavedRoomHandler,
   copyRoomLink,
+  shareRoomNative,
   openShareRoomModal,
+  openJoinRoomModal,
+  enterRoomFromJoinModal,
+  submitJoinRequestAction,
   openCreateRoomModal,
+  switchHubTab,
+  onGroupSearchInput,
+  refreshJoinRequestsList,
+  acceptJoinRequestAction,
+  rejectJoinRequestAction,
   confirmCreateRoom,
   switchRoom,
   loadSamplePreset,
+  openCloseRoomModal,
+  confirmCloseRoomAction,
+  openDiscardRoomModal,
+  confirmDiscardRoomAction,
+  restoreCurrentRoom,
   closeModal,
   validateMemberName,
   validateGoogleId,
   validatePhoneNumber
 };
 
-// Initialize on DOM load
-window.addEventListener('DOMContentLoaded', initApp);
-
+// Initialize on DOM load or immediately if already ready
+if (document.readyState === 'loading') {
+  window.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
+}

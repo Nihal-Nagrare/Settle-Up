@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Settle Up - Smart Expense & Debt Simplifier</title>
   <meta name="description" content="Greedy Minimum Cash-Flow algorithm group expense tracker, bill splitter, UPI settlement, and room sharing.">
-  <link rel="stylesheet" href="./src/css/styles.css">
+  <base href="/">
+  <link rel="stylesheet" href="/src/css/styles.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💸</text></svg>">
 </head>
 <body>
@@ -18,7 +19,10 @@
       <div class="brand-section">
         <div class="brand-logo-badge">⚡</div>
         <div class="brand-info">
-          <h1 id="room-name-display" class="text-gradient">Goa Beach Vacation 2026 🌴</h1>
+          <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+            <h1 id="room-name-display" class="text-gradient">Goa Beach Vacation 2026 🌴</h1>
+            <span id="room-status-badge" class="room-status-pill status-pill-active">Active</span>
+          </div>
           <p>Greedy Minimum Cash-Flow Debt Optimizer</p>
         </div>
       </div>
@@ -52,18 +56,33 @@
           🔄 Sample Trip
         </button>
 
-        <!-- Room Switcher / Create -->
-        <button class="btn btn-secondary btn-sm" onclick="window.app.openCreateRoomModal()" title="Switch or Create Room">
-          🏠 Rooms
+        <!-- Room Switcher & Hub with Pending Badge -->
+        <button id="room-hub-btn" class="btn btn-secondary btn-sm" onclick="window.app.openCreateRoomModal()" title="Room Hub & Discovery" style="position: relative;">
+          <span>🏠 Rooms</span>
+          <span id="hub-pending-badge" class="badge-counter" style="display: none;">0</span>
+        </button>
+
+        <!-- Lifecycle Actions -->
+        <button id="header-close-room-btn" class="btn btn-secondary btn-sm" onclick="window.app.openCloseRoomModal()" title="Finish Trip / Close Room">
+          <span>🔒 Close</span>
+        </button>
+        <button id="header-archive-room-btn" class="btn btn-secondary btn-sm" onclick="window.app.openDiscardRoomModal()" title="Archive / Discard Room">
+          <span>📦 Archive</span>
+        </button>
+        <button id="header-restore-room-btn" class="btn btn-emerald btn-sm" onclick="window.app.restoreCurrentRoom()" title="Restore Room to Active" style="display: none;">
+          <span>🔄 Restore Room</span>
         </button>
 
         <!-- Add Expense Primary Action -->
-        <button class="btn btn-primary" onclick="window.app.openAddExpenseModal()">
+        <button id="header-add-expense-btn" class="btn btn-primary" onclick="window.app.openAddExpenseModal()">
           <span>➕</span>
           <span>Add Expense</span>
         </button>
       </div>
     </header>
+
+    <!-- Completed / Archived Room Lifecycle Banner -->
+    <div id="room-lifecycle-banner-container"></div>
 
     <!-- Room Members Strip -->
     <section class="glass-card members-bar">
@@ -72,7 +91,7 @@
           <span>👥</span>
           <span>Trip Members & Net Balances</span>
         </div>
-        <button class="btn btn-secondary btn-sm" onclick="window.app.openAddMemberModal()">
+        <button id="members-add-friend-btn" class="btn btn-secondary btn-sm" onclick="window.app.openAddMemberModal()">
           <span>➕ Add Friend</span>
         </button>
       </div>
@@ -203,7 +222,7 @@
             <option value="shopping">🛍️ Shopping & Gear</option>
             <option value="general">🏷️ General / Other</option>
           </select>
-          <button class="btn btn-primary" onclick="window.app.openAddExpenseModal()">
+          <button id="expenses-tab-add-btn" class="btn btn-primary" onclick="window.app.openAddExpenseModal()">
             ➕ Add Expense
           </button>
         </div>
@@ -358,7 +377,6 @@
       </div>
 
       <div class="modal-body">
-        <!-- Target Debt Flow Header -->
         <div class="glass-card-elevated" style="padding: 0.85rem 1rem; text-align: center;">
           <div style="font-size: 0.8rem; color: var(--text-muted);">Debt Settlement</div>
           <div style="font-size: 1.15rem; font-weight: 700; margin: 0.25rem 0;">
@@ -369,7 +387,6 @@
           </div>
         </div>
 
-        <!-- Paid Amount Input -->
         <div class="form-group">
           <label class="form-label">Paid Amount <span class="required-badge">*</span></label>
           <input type="number" step="0.01" id="settle-amount-input" class="text-input font-mono" style="font-size: 1.25rem; font-weight: 700; text-align: center;" oninput="window.app.validateSettleAmount()">
@@ -378,7 +395,6 @@
           </div>
         </div>
 
-        <!-- Payment Method Selection -->
         <div class="form-group">
           <label class="form-label">Payment Method</label>
           <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem;">
@@ -400,7 +416,6 @@
           </div>
         </div>
 
-        <!-- METHOD 1: UPI Panel -->
         <div id="settle-panel-upi">
           <div class="qr-preview-box" style="margin-bottom: 1rem;">
             <canvas id="settle-qr-canvas" width="180" height="180"></canvas>
@@ -413,7 +428,6 @@
           </div>
         </div>
 
-        <!-- METHOD 2: Bank / Card Panel -->
         <div id="settle-panel-bank" style="display: none;">
           <div class="glass-card-elevated" style="padding: 0.85rem; margin-bottom: 0.85rem;">
             <div style="font-size: 0.8rem; font-weight: 700; color: #93c5fd; margin-bottom: 0.3rem;">🏦 Direct Bank / Card Transfer</div>
@@ -423,7 +437,6 @@
           </div>
         </div>
 
-        <!-- METHOD 3: Cash Panel -->
         <div id="settle-panel-cash" style="display: none;">
           <div class="glass-card-elevated" style="padding: 1rem; text-align: center; border-color: rgba(245, 158, 11, 0.3); background: rgba(245, 158, 11, 0.05); margin-bottom: 0.85rem;">
             <div style="font-size: 1.5rem; margin-bottom: 0.3rem;">🤝</div>
@@ -437,9 +450,7 @@
           </div>
         </div>
 
-        <!-- Proof Upload & Fields for Digital Methods (UPI & Bank) -->
         <div id="settle-digital-proof-fields">
-          <!-- Proof Security Warning Notice -->
           <div class="proof-warning-banner">
             <span>🛡️</span>
             <div>
@@ -447,7 +458,6 @@
             </div>
           </div>
 
-          <!-- Proof Image Upload -->
           <div class="form-group" style="margin-top: 0.75rem;">
             <label class="form-label">Upload Payment Proof (Screenshot / Slip) <span class="required-badge">*</span></label>
             <div class="proof-upload-zone" id="proof-upload-dropzone" onclick="document.getElementById('settle-proof-file-input').click()">
@@ -465,14 +475,12 @@
             <span class="field-error" id="settle-proof-error"></span>
           </div>
 
-          <!-- Transaction / Reference ID -->
           <div class="form-group">
             <label class="form-label">Transaction ID / UTR / Reference Number (Optional)</label>
             <input type="text" id="settle-txn-id-input" class="text-input font-mono" placeholder="e.g. UPI Ref #492837491029 or UTR12345678">
           </div>
         </div>
 
-        <!-- Date & Time -->
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
           <div class="form-group">
             <label class="form-label">Payment Date</label>
@@ -484,7 +492,6 @@
           </div>
         </div>
 
-        <!-- Reference Notes -->
         <div class="form-group">
           <label class="form-label">Note / Remark (Optional)</label>
           <input type="text" id="settle-note-input" class="text-input" placeholder="e.g. Paid for Goa Villa & Drinks">
@@ -523,7 +530,6 @@
           </div>
         </div>
 
-        <!-- Verification Details Table -->
         <div class="glass-card-elevated" style="padding: 0.85rem 1rem;">
           <div class="receipt-row">
             <span style="color: var(--text-muted);">Payment Method:</span>
@@ -543,7 +549,6 @@
           </div>
         </div>
 
-        <!-- Proof Image Box (if available) -->
         <div id="review-proof-container" style="display: flex; flex-direction: column; gap: 0.4rem;">
           <label class="form-label" style="display: flex; justify-content: space-between;">
             <span>Attached Screenshot Proof</span>
@@ -558,7 +563,6 @@
           </div>
         </div>
 
-        <!-- Cash Physical Prompt (if cash) -->
         <div id="review-cash-prompt" style="display: none;">
           <div class="glass-card-elevated" style="padding: 1rem; text-align: center; border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.08);">
             <div style="font-size: 1.25rem; font-weight: 700; color: #fde68a;">
@@ -822,7 +826,7 @@
 
   <!-- MODAL 6: Share Room Modal -->
   <div id="share-room-modal" class="modal-overlay">
-    <div class="modal-dialog" style="max-width: 440px;">
+    <div class="modal-dialog" style="max-width: 460px;">
       <div class="modal-header">
         <h3>📱 Share Room Link</h3>
         <button class="modal-close-btn" onclick="window.app.closeModal('share-room-modal')">✕</button>
@@ -833,52 +837,249 @@
           <canvas id="share-room-qr-canvas" width="200" height="200"></canvas>
         </div>
 
-        <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+        <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">
           Room ID: <strong id="share-room-id-display" class="font-mono" style="color: var(--primary-light);">GOA2026</strong>
         </div>
+
+        <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+          Share this URL with friends so they can scan or click to request joining your trip.
+        </p>
 
         <div class="form-group">
           <input type="text" id="share-room-url-input" class="text-input font-mono" readonly style="font-size: 0.8rem; text-align: center;">
         </div>
       </div>
 
-      <div class="modal-footer">
-        <button class="btn btn-primary" style="width: 100%;" onclick="window.app.copyRoomLink()">
-          📋 Copy Shareable Link
+      <div class="modal-footer" style="display: flex; gap: 0.5rem;">
+        <button class="btn btn-secondary" style="flex: 1;" onclick="window.app.shareRoomNative()" id="share-room-native-btn">
+          📤 Native Share
+        </button>
+        <button class="btn btn-primary" style="flex: 1;" onclick="window.app.copyRoomLink()">
+          📋 Copy Link
         </button>
       </div>
     </div>
   </div>
 
-  <!-- MODAL 7: Create / Switch Room Modal -->
-  <div id="create-room-modal" class="modal-overlay">
-    <div class="modal-dialog">
+  <!-- MODAL: Join Room Landing Page & Request Modal -->
+  <div id="join-room-modal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 480px;">
       <div class="modal-header">
-        <h3>🏠 Room Switcher</h3>
+        <h3>👋 Join Trip Group</h3>
+        <button class="modal-close-btn" onclick="window.app.closeModal('join-room-modal')">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="glass-card-elevated" style="padding: 1.25rem; text-align: center; margin-bottom: 1rem;">
+          <div style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">INVITATION TO JOIN</div>
+          <h3 id="join-preview-name" style="font-size: 1.35rem; font-weight: 800; margin: 0.35rem 0;" class="text-gradient">Trip Name</h3>
+          <div style="display: flex; justify-content: center; gap: 0.75rem; font-size: 0.8rem; color: var(--text-muted); margin-top: 0.3rem;">
+            <span>🔑 Room ID: <strong id="join-preview-id" class="font-mono">ROOM</strong></span>
+            <span>•</span>
+            <span>👥 <span id="join-preview-members">0</span> Members</span>
+            <span>•</span>
+            <span id="join-preview-status" class="room-status-pill status-pill-active">ACTIVE</span>
+          </div>
+        </div>
+
+        <!-- State 1: Already a member -->
+        <div id="join-state-already-member" style="display: none; text-align: center; padding: 1rem 0;">
+          <div style="font-size: 2rem; margin-bottom: 0.5rem;">🎉</div>
+          <h4 style="color: #6ee7b7; font-size: 1.1rem; margin-bottom: 0.4rem;">You are already a member of this trip!</h4>
+          <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1rem;">You have full access to view, add expenses, and settle balances in this room.</p>
+          <button class="btn btn-primary" style="width: 100%;" onclick="window.app.enterRoomFromJoinModal()">🚀 Enter Room</button>
+        </div>
+
+        <!-- State 2: Closed/Archived Room -->
+        <div id="join-state-closed" style="display: none; text-align: center; padding: 1rem 0;">
+          <div style="font-size: 2rem; margin-bottom: 0.5rem;">🔒</div>
+          <h4 style="color: #fca5a5; font-size: 1.1rem; margin-bottom: 0.4rem;">This room is no longer active</h4>
+          <p style="font-size: 0.82rem; color: var(--text-muted);">This trip has been completed or archived by the organizer and is not accepting new join requests.</p>
+        </div>
+
+        <!-- State 3: Request Pending -->
+        <div id="join-state-pending" style="display: none; text-align: center; padding: 1rem 0;">
+          <div style="font-size: 2rem; margin-bottom: 0.5rem;">⏳</div>
+          <h4 style="color: #fde68a; font-size: 1.1rem; margin-bottom: 0.4rem;">Join Request Pending Approval</h4>
+          <p style="font-size: 0.82rem; color: var(--text-muted);">Your request to join this trip has been sent to the room organizer. You will be able to access the room once accepted.</p>
+        </div>
+
+        <!-- State 4: Normal Join Form -->
+        <div id="join-state-form">
+          <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.85rem; line-height: 1.4;">
+            Fill in your basic information below to request entry into this trip. The room admin will review your request.
+          </p>
+
+          <div class="form-group">
+            <label class="form-label" for="join-applicant-name">Your Full Name <span class="required-badge">*</span></label>
+            <input type="text" id="join-applicant-name" class="text-input" placeholder="e.g. Sam Wilson" autocomplete="name">
+            <span class="field-error" id="join-applicant-name-error"></span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="join-applicant-email">Google ID / Email Address <span class="required-badge">*</span></label>
+            <input type="email" id="join-applicant-email" class="text-input" placeholder="e.g. sam.wilson@gmail.com" autocomplete="email">
+            <span class="field-error" id="join-applicant-email-error"></span>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+            <div class="form-group">
+              <label class="form-label" for="join-applicant-phone">Phone (Optional)</label>
+              <input type="tel" id="join-applicant-phone" class="text-input" placeholder="+1 555-0123" autocomplete="tel">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="join-applicant-upi">UPI ID (Optional)</label>
+              <input type="text" id="join-applicant-upi" class="text-input" placeholder="sam@okhdfcbank">
+            </div>
+          </div>
+
+          <div style="margin-top: 1rem;">
+            <button class="btn btn-primary" style="width: 100%;" onclick="window.app.submitJoinRequestAction()">
+              📨 Request to Join Room
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 7: Upgraded Room Hub (Active, Find Groups, Join Requests, Archived, Create) -->
+  <div id="create-room-modal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 580px;">
+      <div class="modal-header">
+        <h3>🏠 Room Hub & Group Directory</h3>
         <button class="modal-close-btn" onclick="window.app.closeModal('create-room-modal')">✕</button>
       </div>
 
       <div class="modal-body">
-        <div class="form-group">
-          <label class="form-label">Create New Room ID (e.g. TRIP-2026, PARIS-TRIP)</label>
-          <input type="text" id="new-room-id-input" class="text-input font-mono" style="text-transform: uppercase;">
+        <!-- Room Hub Sub-Tabs -->
+        <div class="hub-tabs">
+          <button class="hub-tab-btn active" data-hubtab="active" onclick="window.app.switchHubTab('active')">
+            <span>🌟 Active Trips</span>
+          </button>
+          <button class="hub-tab-btn" data-hubtab="search" onclick="window.app.switchHubTab('search')">
+            <span>🔍 Find a Group</span>
+          </button>
+          <button class="hub-tab-btn" data-hubtab="requests" onclick="window.app.switchHubTab('requests')">
+            <span>📬 Join Requests</span>
+            <span id="hub-requests-badge" class="badge-counter" style="display: none;">0</span>
+          </button>
+          <button class="hub-tab-btn" data-hubtab="archived" onclick="window.app.switchHubTab('archived')">
+            <span>📦 Archived</span>
+          </button>
+          <button class="hub-tab-btn" data-hubtab="create" onclick="window.app.switchHubTab('create')">
+            <span>➕ Create New</span>
+          </button>
         </div>
 
-        <div class="form-group">
-          <label class="form-label">Room Title</label>
-          <input type="text" id="new-room-name-input" class="text-input" placeholder="e.g. Eurotrip Summer 2026">
+        <!-- HUB TAB 1: Active Rooms -->
+        <div id="hub-tab-view-active">
+          <div class="form-label" style="margin-bottom: 0.5rem;">Your Active Trips</div>
+          <div id="saved-rooms-list" style="max-height: 320px; overflow-y: auto;">
+            <!-- Injected via JS -->
+          </div>
         </div>
 
-        <button class="btn btn-primary" style="width: 100%; margin-top: 0.5rem;" onclick="window.app.confirmCreateRoom()">
-          ✨ Create New Room
+        <!-- HUB TAB 2: Find / Search Groups -->
+        <div id="hub-tab-view-search" style="display: none;">
+          <div class="form-group">
+            <div class="search-box">
+              <span>🔍</span>
+              <input type="text" id="group-search-input" placeholder="Search by group name or room ID..." oninput="window.app.onGroupSearchInput(event)">
+            </div>
+          </div>
+          <div id="group-search-results" style="max-height: 300px; overflow-y: auto;">
+            <div style="text-align: center; color: var(--text-muted); padding: 1.5rem 0; font-size: 0.85rem;">
+              Type a group name or room ID above to find and request entry into trips.
+            </div>
+          </div>
+        </div>
+
+        <!-- HUB TAB 3: Join Requests (Admin Approval) -->
+        <div id="hub-tab-view-requests" style="display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+            <div class="form-label" style="margin: 0;">Pending Join Requests for <strong id="hub-current-room-name" class="font-mono">Current Room</strong></div>
+            <button class="btn btn-secondary btn-sm" onclick="window.app.refreshJoinRequestsList()">🔄 Refresh</button>
+          </div>
+          <div id="join-requests-list" style="max-height: 320px; overflow-y: auto;">
+            <!-- Injected via JS -->
+          </div>
+        </div>
+
+        <!-- HUB TAB 4: Archived Rooms -->
+        <div id="hub-tab-view-archived" style="display: none;">
+          <div class="form-label" style="margin-bottom: 0.5rem;">Completed & Archived Trips</div>
+          <div id="archived-rooms-list" style="max-height: 320px; overflow-y: auto;">
+            <!-- Injected via JS -->
+          </div>
+        </div>
+
+        <!-- HUB TAB 5: Create New Room -->
+        <div id="hub-tab-view-create" style="display: none;">
+          <div class="form-group">
+            <label class="form-label">Create New Room ID (e.g. TRIP-2026, PARIS-TRIP)</label>
+            <input type="text" id="new-room-id-input" class="text-input font-mono" style="text-transform: uppercase;">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Room Title</label>
+            <input type="text" id="new-room-name-input" class="text-input" placeholder="e.g. Eurotrip Summer 2026">
+          </div>
+
+          <button class="btn btn-primary" style="width: 100%; margin-top: 0.5rem;" onclick="window.app.confirmCreateRoom()">
+            ✨ Create New Room
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Close Room Confirmation Modal -->
+  <div id="close-room-confirm-modal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 440px;">
+      <div class="modal-header">
+        <h3>🔒 Close Trip / Finish Room</h3>
+        <button class="modal-close-btn" onclick="window.app.closeModal('close-room-confirm-modal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="text-align: center; font-size: 2.2rem; margin-bottom: 0.5rem;">🏁</div>
+        <p style="font-size: 0.9rem; line-height: 1.5; color: var(--text-main); margin-bottom: 0.75rem;">
+          Are you sure you want to close this room?
+        </p>
+        <p style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.4;">
+          You and your group will no longer be able to add new expenses or members. All existing records, balance simplifications, payment proofs, and receipts will be safely preserved as read-only history.
+        </p>
+      </div>
+      <div class="modal-footer" style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+        <button class="btn btn-secondary" onclick="window.app.closeModal('close-room-confirm-modal')">Cancel</button>
+        <button class="btn btn-primary" style="background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%);" onclick="window.app.confirmCloseRoomAction()">
+          🔒 Close Room
         </button>
+      </div>
+    </div>
+  </div>
 
-        <hr style="border: none; border-top: 1px solid var(--border-glass); margin: 1rem 0;">
-
-        <div class="form-label" style="margin-bottom: 0.5rem;">Previously Visited Rooms</div>
-        <div id="saved-rooms-list">
-          <!-- Injected via JS -->
-        </div>
+  <!-- MODAL: Discard / Archive Room Confirmation Modal -->
+  <div id="discard-room-confirm-modal" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 440px;">
+      <div class="modal-header">
+        <h3>📦 Archive Trip</h3>
+        <button class="modal-close-btn" onclick="window.app.closeModal('discard-room-confirm-modal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="text-align: center; font-size: 2.2rem; margin-bottom: 0.5rem;">📦</div>
+        <p style="font-size: 0.9rem; line-height: 1.5; color: var(--text-main); margin-bottom: 0.75rem;">
+          Are you sure you want to archive this room?
+        </p>
+        <p style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.4;">
+          This room will be moved to your <strong>Archived Rooms</strong> list. You can view its history or restore it back to active anytime.
+        </p>
+      </div>
+      <div class="modal-footer" style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+        <button class="btn btn-secondary" onclick="window.app.closeModal('discard-room-confirm-modal')">Cancel</button>
+        <button class="btn btn-secondary" style="color: #f59e0b; border-color: rgba(245, 158, 11, 0.4);" onclick="window.app.confirmDiscardRoomAction()">
+          📦 Archive Room
+        </button>
       </div>
     </div>
   </div>
@@ -887,6 +1088,6 @@
   <div id="toast-container" class="toast-container"></div>
 
   <!-- Module Entrypoint -->
-  <script type="module" src="./src/js/app.js"></script>
+  <script type="module" src="/src/js/app.js?v=3"></script>
 </body>
 </html>

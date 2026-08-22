@@ -45,22 +45,28 @@ An interactive group expense tracking and bill-splitting web application built a
 
 ## 🛠️ Technology Stack
 
+- **Backend**: Python 3, Flask REST API (`server.py`), SQLite persistence (`settleup.db`)
 - **Frontend**: HTML5, Vanilla JavaScript (ES Modules), CSS3 Glassmorphism Design System
 - **Fonts**: *Plus Jakarta Sans* & *JetBrains Mono* (Google Fonts)
-- **Algorithms**: Greedy Minimum Cash Flow (`O(N log N)` with balanced netting)
+- **Algorithms**: Greedy Minimum Cash Flow (`O(N log N)` with balanced netting in both Python and JS)
 - **Engines**: Pure JS Canvas QR Generator, Custom Canvas Confetti Engine
-- **Storage**: Browser LocalStorage with URL query sync (`?room=XYZ`)
+- **Storage**: SQLite Central Database with dual-mode LocalStorage client cache
 
 ---
 
 ## 💻 How to Run Locally
 
-You can open `index.html` directly in any web browser, or serve it using Python's built-in HTTP server:
+Start the Python backend and web server:
 
 ```bash
-# Start a local web server on port 3000
-python -m http.server 3000
+python server.py
 ```
 
-Then visit:
-[http://localhost:3000?room=GOA2026](http://localhost:3000?room=GOA2026)
+Or run on a custom port:
+```bash
+python server.py --port 5000
+```
+
+Then visit in your browser:
+[http://localhost:5000?room=GOA2026](http://localhost:5000?room=GOA2026)
+
