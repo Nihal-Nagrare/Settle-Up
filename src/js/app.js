@@ -5,21 +5,21 @@
  */
 
 import { simplifyDebtsGreedy, calculateNetBalances } from './greedyAlgorithm.js';
-import { 
-  loadRoom, 
+import {
+  loadRoom,
   loadRoomAsync,
-  saveRoom, 
+  saveRoom,
   saveRoomAsync,
-  getCurrentRoomId, 
-  setUrlRoomId, 
-  createSampleRoom, 
-  generateRoomId, 
+  getCurrentRoomId,
+  setUrlRoomId,
+  createSampleRoom,
+  generateRoomId,
   getShareableRoomUrl,
   getUserProfile,
   saveUserProfile,
-  listSavedRooms, 
+  listSavedRooms,
   listSavedRoomsAsync,
-  deleteSavedRoom, 
+  deleteSavedRoom,
   deleteSavedRoomAsync,
   resetSampleRoomAsync,
   apiSearchRooms,
@@ -42,10 +42,10 @@ import {
   apiFetchRoomBalances,
   apiFetchRoomSimplification,
   apiSyncUserProfile,
-  formatCurrency, 
-  CURRENCIES, 
-  CATEGORIES, 
-  AVATAR_COLORS 
+  formatCurrency,
+  CURRENCIES,
+  CATEGORIES,
+  AVATAR_COLORS
 } from './roomStore.js';
 import { generateQRCodeCanvas, buildUPIPayload } from './qrGenerator.js';
 import { triggerConfetti } from './confetti.js';
@@ -92,11 +92,12 @@ export async function initApp() {
   const pathname = window.location.pathname;
   const urlParams = new URLSearchParams(window.location.search);
   const joinParam = urlParams.get('join');
-  const isJoinRoute = (pathname && pathname.startsWith('/join-room/')) || Boolean(joinParam);
+  const joinMatch = pathname ? pathname.match(/\/join-room\/([^/?#]+)/) : null;
+  const isJoinRoute = Boolean(joinMatch) || Boolean(joinParam);
 
   let targetRoomId = 'GOA2026';
-  if (pathname && pathname.startsWith('/join-room/')) {
-    targetRoomId = pathname.replace('/join-room/', '').trim().toUpperCase();
+  if (joinMatch && joinMatch[1]) {
+    targetRoomId = joinMatch[1].trim().toUpperCase();
   } else if (joinParam) {
     targetRoomId = joinParam.trim().toUpperCase();
   } else {
@@ -166,11 +167,10 @@ function renderHeader() {
   const status = currentRoom.status || 'ACTIVE';
 
   if (statusBadge) {
-    statusBadge.className = `room-status-pill ${
-      status === 'COMPLETED' ? 'status-pill-completed' :
-      status === 'DISCARDED' ? 'status-pill-archived' :
-      'status-pill-active'
-    }`;
+    statusBadge.className = `room-status-pill ${status === 'COMPLETED' ? 'status-pill-completed' :
+        status === 'DISCARDED' ? 'status-pill-archived' :
+          'status-pill-active'
+      }`;
     statusBadge.innerText = status;
   }
 
@@ -209,9 +209,9 @@ function renderLifecycleBanner() {
               ${isSettled ? 'Trip Completed & Settled in Full' : 'Trip Completed & Closed'}
             </h4>
             <p style="font-size: 0.78rem; color: var(--text-muted); margin: 0.15rem 0 0 0;">
-              ${isSettled 
-                ? 'All group expenses and debts have been cleared. All records are archived in read-only mode.' 
-                : 'This room is closed to new expenses or members. Historical balances and receipts remain accessible.'}
+              ${isSettled
+        ? 'All group expenses and debts have been cleared. All records are archived in read-only mode.'
+        : 'This room is closed to new expenses or members. Historical balances and receipts remain accessible.'}
             </p>
           </div>
         </div>
@@ -378,9 +378,9 @@ function renderSimplifierTab() {
         const fromInitial = (transfer.fromMemberName || 'U').charAt(0).toUpperCase();
         const toInitial = (transfer.toMemberName || 'U').charAt(0).toUpperCase();
 
-        const pendingSettlement = currentRoom.settlements.find(s => 
-          s.fromMemberId === transfer.fromMemberId && 
-          s.toMemberId === transfer.toMemberId && 
+        const pendingSettlement = currentRoom.settlements.find(s =>
+          s.fromMemberId === transfer.fromMemberId &&
+          s.toMemberId === transfer.toMemberId &&
           (s.status === 'PROOF_SUBMITTED' || s.status === 'AWAITING_RECEIVER')
         );
 
@@ -1308,11 +1308,11 @@ export function handleProofFileSelect(event) {
   }
 
   const reader = new FileReader();
-  reader.onload = function(e) {
+  reader.onload = function (e) {
     const rawDataUrl = e.target.result;
 
     const img = new Image();
-    img.onload = function() {
+    img.onload = function () {
       const maxDim = 800;
       let w = img.width;
       let h = img.height;

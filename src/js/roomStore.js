@@ -223,20 +223,24 @@ export function generateRoomId(prefix = 'TRIP') {
 }
 
 /**
- * Generates a real shareable URL using the browser's active domain/origin
+ * Generates a real shareable URL using the browser's active domain/origin and subpath
  */
 export function getShareableRoomUrl(roomId) {
   const origin = window.location.origin;
-  return `${origin}/join-room/${(roomId || 'GOA2026').toUpperCase()}`;
+  const pathname = window.location.pathname;
+  const basePath = pathname.replace(/\/join-room\/.*$/, '').replace(/\/index\.html$/, '').replace(/\/$/, '');
+  const cleanRoomId = (roomId || 'GOA2026').toUpperCase();
+  return `${origin}${basePath}/?join=${cleanRoomId}`;
 }
 
 /**
- * Gets the current Room ID from URL path (/join-room/XYZ), query params (?room=XYZ), or localStorage
+ * Gets the current Room ID from URL path (/join-room/XYZ), query params (?room=XYZ or ?join=XYZ), or localStorage
  */
 export function getCurrentRoomId() {
   const pathname = window.location.pathname;
-  if (pathname && pathname.startsWith('/join-room/')) {
-    const fromPath = pathname.replace('/join-room/', '').trim();
+  const joinMatch = pathname ? pathname.match(/\/join-room\/([^/?#]+)/) : null;
+  if (joinMatch && joinMatch[1]) {
+    const fromPath = joinMatch[1].trim();
     if (fromPath) return fromPath.toUpperCase();
   }
 
@@ -260,8 +264,8 @@ export function getCurrentRoomId() {
 export function setUrlRoomId(roomId) {
   const url = new URL(window.location.href);
   url.searchParams.set('room', roomId);
-  if (url.pathname.startsWith('/join-room/')) {
-    url.pathname = '/';
+  if (url.pathname.includes('/join-room/')) {
+    url.pathname = url.pathname.replace(/\/join-room\/.*$/, '') || '/';
   }
   window.history.replaceState({}, '', url.toString());
   try {
