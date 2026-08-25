@@ -17,6 +17,18 @@ import {
   getShareableRoomUrl,
   getUserProfile,
   saveUserProfile,
+  getAuthToken,
+  setAuthToken,
+  clearAuthToken,
+  getAuthenticatedUser,
+  setAuthenticatedUser,
+  clearAuth,
+  apiLogin,
+  apiRegister,
+  apiLogout,
+  apiGetMe,
+  apiUpdateMe,
+  apiGetUser,
   listSavedRooms,
   listSavedRoomsAsync,
   deleteSavedRoom,
@@ -37,6 +49,9 @@ import {
   apiDeleteExpense,
   apiAddSettlement,
   apiUpdateSettlement,
+  apiConfirmSettlement,
+  apiRejectSettlement,
+  apiDisputeSettlement,
   apiDeleteSettlement,
   apiUpdateCurrency,
   apiFetchRoomBalances,
@@ -58,6 +73,8 @@ let expenseSearchQuery = '';
 let expenseCategoryFilter = 'all';
 let currentSplitMode = 'EQUAL'; // 'EQUAL' | 'EXACT' | 'PERCENT' | 'SHARES'
 let selectedCategory = 'food';
+let selectedSignupAvatarColor = '#6366f1';
+let selectedProfileAvatarColor = '#6366f1';
 let selectedSettlementTarget = null;
 let activeReceiptData = null;
 let selectedPaymentMethod = 'UPI'; // 'UPI' | 'CASH' | 'BANK_TRANSFER'
@@ -110,6 +127,15 @@ export async function initApp() {
   setupEventListeners();
   renderApp();
 
+  // Validate authenticated session in background
+  if (getAuthToken()) {
+    apiGetMe().then(user => {
+      if (user) {
+        updateHeaderAuthUI();
+      }
+    }).catch(() => {});
+  }
+
   // 2. Asynchronously sync with Python backend API
   try {
     const serverRoom = await loadRoomAsync(targetRoomId);
@@ -135,6 +161,7 @@ export function renderApp() {
   if (!currentRoom) return;
 
   renderHeader();
+  updateHeaderAuthUI();
   renderLifecycleBanner();
   renderMemberBar();
   renderActiveTab();
@@ -168,8 +195,8 @@ function renderHeader() {
 
   if (statusBadge) {
     statusBadge.className = `room-status-pill ${status === 'COMPLETED' ? 'status-pill-completed' :
-        status === 'DISCARDED' ? 'status-pill-archived' :
-          'status-pill-active'
+      status === 'DISCARDED' ? 'status-pill-archived' :
+        'status-pill-active'
       }`;
     statusBadge.innerText = status;
   }
@@ -274,9 +301,9 @@ function renderMemberBar() {
     const tooltipText = tooltipParts.join(' | ');
 
     return `
-      <div class="member-chip" onclick="${isReadOnly ? '' : `window.app.openEditMemberModal('${member.id}')`}" title="${escapeHtml(tooltipText)}">
+      <div class="member-chip" onclick="${isReadOnly ? '' : `window.app.openEditMemberModal('${escapeHtml(member.id)}')`}" title="${escapeHtml(tooltipText)}">
         <div class="member-avatar" style="background-color: ${member.avatarColor || '#6366f1'}">
-          ${initial}
+          ${escapeHtml(initial)}
         </div>
         <div class="member-info">
           <span class="member-name">${escapeHtml(member.name)}</span>
@@ -911,6 +938,15 @@ function setupEventListeners() {
       });
     }
   });
+
+  // Global click handler to close user dropdown
+  document.addEventListener('click', (e) => {
+    const userDropdown = document.getElementById('user-header-dropdown');
+    const userPill = e.target.closest('.user-header-pill');
+    if (userDropdown && !userPill && !userDropdown.contains(e.target)) {
+      userDropdown.classList.remove('show');
+    }
+  });
 }
 
 // Modal Controllers
@@ -1298,14 +1334,34 @@ export function validateSettleAmount() {
   }
 }
 
+let currentUploadedProofFile = null;
+
 export function handleProofFileSelect(event) {
   const file = event?.target?.files?.[0];
   if (!file) return;
 
-  if (!file.type.startsWith('image/')) {
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+  const proofErr = document.getElementById('settle-proof-error');
+
+  if (!allowedTypes.includes(file.type)) {
+    if (proofErr) {
+      proofErr.innerHTML = `⚠️ <span>Invalid format. Only JPEG, PNG, and WebP images are allowed.</span>`;
+      proofErr.classList.add('visible');
+    }
     alert('Please select an image file (PNG, JPG, WEBP).');
     return;
   }
+
+  if (file.size > 5 * 1024 * 1024) {
+    if (proofErr) {
+      proofErr.innerHTML = `⚠️ <span>Proof screenshot exceeds maximum 5MB size limit.</span>`;
+      proofErr.classList.add('visible');
+    }
+    alert('Proof screenshot exceeds 5MB size limit.');
+    return;
+  }
+
+  currentUploadedProofFile = file;
 
   const reader = new FileReader();
   reader.onload = function (e) {
@@ -1313,7 +1369,7 @@ export function handleProofFileSelect(event) {
 
     const img = new Image();
     img.onload = function () {
-      const maxDim = 800;
+      const maxDim = 1200;
       let w = img.width;
       let h = img.height;
       if (w > maxDim || h > maxDim) {
@@ -1330,14 +1386,13 @@ export function handleProofFileSelect(event) {
       canvas.height = h;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, w, h);
-      const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.82);
+      const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
 
       currentUploadedProofBase64 = compressedDataUrl;
 
       const previewImg = document.getElementById('proof-preview-img');
       const promptEl = document.getElementById('proof-upload-prompt');
       const previewEl = document.getElementById('proof-upload-preview');
-      const proofErr = document.getElementById('settle-proof-error');
 
       if (previewImg) previewImg.src = compressedDataUrl;
       if (promptEl) promptEl.style.display = 'none';
@@ -1387,7 +1442,7 @@ export async function submitSettlementProof() {
   const amount = amtCheck.amount;
   const isCash = selectedPaymentMethod === 'CASH';
 
-  if (!isCash && !currentUploadedProofBase64) {
+  if (!isCash && !currentUploadedProofFile && !currentUploadedProofBase64) {
     const proofErr = document.getElementById('settle-proof-error');
     if (proofErr) {
       proofErr.innerHTML = `⚠️ <span>Please upload a payment screenshot/proof.</span>`;
@@ -1410,34 +1465,77 @@ export async function submitSettlementProof() {
   const status = isCash ? 'AWAITING_RECEIVER' : 'PROOF_SUBMITTED';
   const settlementId = `set_${Date.now()}`;
 
-  const newSettlement = {
-    id: settlementId,
-    fromMemberId: selectedSettlementTarget.fromMemberId,
-    toMemberId: selectedSettlementTarget.toMemberId,
-    amount: amount,
-    currency: currentRoom.currency || 'USD',
-    paymentMethod: selectedPaymentMethod,
-    status: status,
-    proofImage: isCash ? null : currentUploadedProofBase64,
-    transactionId: txnId || (selectedPaymentMethod === 'UPI' ? `UPI-${Math.floor(1000000000 + Math.random() * 9000000000)}` : `TXN-${Math.floor(100000 + Math.random() * 900000)}`),
-    upiTxnId: txnId || `TXN-${Math.floor(100000 + Math.random() * 900000)}`,
-    referenceNote: noteVal || (isCash ? 'Physical Cash Handover' : 'Payment Proof Submitted'),
-    timestamp: timestampStr,
-    submittedAt: new Date().toISOString(),
-    confirmedAt: null,
-    confirmedBy: null,
-    rejectionReason: null,
-    rejectionNotes: null,
-    disputeNotes: null
-  };
+  let res;
+  if (isCash) {
+    const newSettlement = {
+      id: settlementId,
+      fromMemberId: selectedSettlementTarget.fromMemberId,
+      toMemberId: selectedSettlementTarget.toMemberId,
+      amount: amount,
+      currency: currentRoom.currency || 'USD',
+      paymentMethod: 'CASH',
+      status: 'AWAITING_RECEIVER',
+      proofImage: null,
+      transactionId: txnId || '',
+      upiTxnId: txnId || '',
+      referenceNote: noteVal || 'Physical Cash Handover',
+      timestamp: timestampStr,
+      submittedAt: new Date().toISOString()
+    };
+    res = await apiAddSettlement(currentRoom.id, newSettlement);
+    if (!res.success && res.error) {
+      alert(res.error);
+      return;
+    }
+  } else if (currentUploadedProofFile) {
+    const formData = new FormData();
+    formData.append('id', settlementId);
+    formData.append('fromMemberId', selectedSettlementTarget.fromMemberId);
+    formData.append('toMemberId', selectedSettlementTarget.toMemberId);
+    formData.append('amount', amount);
+    formData.append('currency', currentRoom.currency || 'USD');
+    formData.append('paymentMethod', selectedPaymentMethod);
+    formData.append('status', 'PROOF_SUBMITTED');
+    formData.append('transactionId', txnId || (selectedPaymentMethod === 'UPI' ? `UPI-${Math.floor(1000000000 + Math.random() * 9000000000)}` : `TXN-${Math.floor(100000 + Math.random() * 900000)}`));
+    formData.append('upiTxnId', txnId || `TXN-${Math.floor(100000 + Math.random() * 900000)}`);
+    formData.append('referenceNote', noteVal || 'Payment Proof Submitted');
+    formData.append('timestamp', timestampStr);
+    formData.append('proof_file', currentUploadedProofFile);
 
-  const res = await apiAddSettlement(currentRoom.id, newSettlement);
-  if (res.success && res.room) {
-    currentRoom = res.room;
+    res = await apiAddSettlement(currentRoom.id, formData);
+    if (!res.success && res.error) {
+      alert(res.error);
+      return;
+    }
   } else {
-    currentRoom.settlements.push(newSettlement);
-    await saveRoomAsync(currentRoom);
+    const newSettlement = {
+      id: settlementId,
+      fromMemberId: selectedSettlementTarget.fromMemberId,
+      toMemberId: selectedSettlementTarget.toMemberId,
+      amount: amount,
+      currency: currentRoom.currency || 'USD',
+      paymentMethod: selectedPaymentMethod,
+      status: 'PROOF_SUBMITTED',
+      proofImage: currentUploadedProofBase64,
+      transactionId: txnId || (selectedPaymentMethod === 'UPI' ? `UPI-${Math.floor(1000000000 + Math.random() * 9000000000)}` : `TXN-${Math.floor(100000 + Math.random() * 900000)}`),
+      upiTxnId: txnId || `TXN-${Math.floor(100000 + Math.random() * 900000)}`,
+      referenceNote: noteVal || 'Payment Proof Submitted',
+      timestamp: timestampStr,
+      submittedAt: new Date().toISOString()
+    };
+    res = await apiAddSettlement(currentRoom.id, newSettlement);
+    if (!res.success && res.error) {
+      alert(res.error);
+      return;
+    }
   }
+
+  if (res && res.room) {
+    currentRoom = res.room;
+  }
+
+  currentUploadedProofFile = null;
+  currentUploadedProofBase64 = null;
 
   closeModal('settle-modal');
   renderApp();
@@ -1465,8 +1563,10 @@ export function openReviewSettlementModal(settlementId) {
   const badgeContainer = document.getElementById('review-status-badge-container');
   if (badgeContainer) {
     const status = set.status || 'CONFIRMED';
-    if (status === 'PROOF_SUBMITTED' || status === 'AWAITING_RECEIVER') {
-      badgeContainer.innerHTML = `<span class="status-badge status-badge-awaiting">⏳ Awaiting Receiver Confirmation</span>`;
+    if (status === 'PROOF_SUBMITTED') {
+      badgeContainer.innerHTML = `<span class="status-badge status-badge-awaiting">⏳ Proof Submitted - Awaiting Receiver Confirmation</span>`;
+    } else if (status === 'AWAITING_RECEIVER') {
+      badgeContainer.innerHTML = `<span class="status-badge status-badge-awaiting">🤝 Cash Handover - Awaiting Receiver Confirmation</span>`;
     } else if (status === 'CONFIRMED' || status === 'SETTLED') {
       badgeContainer.innerHTML = `<span class="status-badge status-badge-confirmed">✅ Confirmed & Settled</span>`;
     } else if (status === 'REJECTED') {
@@ -1508,7 +1608,8 @@ export function openReviewSettlementModal(settlementId) {
       proofContainer.style.display = 'flex';
       const img = document.getElementById('review-proof-img');
       if (img) {
-        img.src = set.proofImage || '';
+        const proofSrc = set.proofUrl || (set.proofImage && !set.proofImage.startsWith('data:') ? `/api/rooms/${encodeURIComponent(currentRoom.id)}/settlements/${encodeURIComponent(set.id)}/proof` : (set.proofImage || ''));
+        img.src = proofSrc;
       }
     }
   }
@@ -1525,13 +1626,16 @@ export async function confirmReceiverSettlementAction() {
   const receiver = currentRoom.members.find(m => m.id === set.toMemberId);
   const confirmedBy = receiver ? receiver.name : 'Receiver';
 
-  const res = await apiUpdateSettlement(currentRoom.id, set.id, {
-    status: 'CONFIRMED',
+  const res = await apiConfirmSettlement(currentRoom.id, set.id, {
+    actorMemberId: set.toMemberId,
     confirmedBy: confirmedBy
   });
 
   if (res.success && res.room) {
     currentRoom = res.room;
+  } else if (!res.success && res.error) {
+    alert(res.error);
+    return;
   } else {
     set.status = 'CONFIRMED';
     set.confirmedAt = new Date().toISOString();
@@ -1563,14 +1667,17 @@ export async function submitSettlementRejection() {
   const selectedReason = document.querySelector('input[name="rejection-reason-radio"]:checked')?.value || 'Payment not received';
   const notes = document.getElementById('reject-reason-notes')?.value?.trim();
 
-  const res = await apiUpdateSettlement(currentRoom.id, set.id, {
-    status: 'REJECTED',
+  const res = await apiRejectSettlement(currentRoom.id, set.id, {
+    actorMemberId: set.toMemberId,
     rejectionReason: selectedReason,
     rejectionNotes: notes || ''
   });
 
   if (res.success && res.room) {
     currentRoom = res.room;
+  } else if (!res.success && res.error) {
+    alert(res.error);
+    return;
   } else {
     set.status = 'REJECTED';
     set.rejectionReason = selectedReason;
@@ -1615,13 +1722,16 @@ export async function submitSettlementDispute() {
     return;
   }
 
-  const res = await apiUpdateSettlement(currentRoom.id, set.id, {
-    status: 'DISPUTED',
+  const res = await apiDisputeSettlement(currentRoom.id, set.id, {
+    actorMemberId: set.fromMemberId,
     disputeNotes: notes
   });
 
   if (res.success && res.room) {
     currentRoom = res.room;
+  } else if (!res.success && res.error) {
+    alert(res.error);
+    return;
   } else {
     set.status = 'DISPUTED';
     set.disputeNotes = notes;
@@ -2527,6 +2637,388 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+// =========================================================================
+// Authentication & User Profile UI Handlers
+// =========================================================================
+
+export function renderAvatarColorPickers() {
+  const signupContainer = document.getElementById('signup-avatar-colors');
+  if (signupContainer) {
+    signupContainer.innerHTML = AVATAR_COLORS.map(color => `
+      <div class="avatar-color-option ${color === selectedSignupAvatarColor ? 'selected' : ''}" 
+           style="background: ${color};" 
+           onclick="window.app.selectSignupAvatarColor('${color}')">
+        ${color === selectedSignupAvatarColor ? '✓' : ''}
+      </div>
+    `).join('');
+  }
+
+  const profileContainer = document.getElementById('profile-avatar-colors');
+  if (profileContainer) {
+    profileContainer.innerHTML = AVATAR_COLORS.map(color => `
+      <div class="avatar-color-option ${color === selectedProfileAvatarColor ? 'selected' : ''}" 
+           style="background: ${color};" 
+           onclick="window.app.selectProfileAvatarColor('${color}')">
+        ${color === selectedProfileAvatarColor ? '✓' : ''}
+      </div>
+    `).join('');
+  }
+}
+
+export function selectSignupAvatarColor(color) {
+  selectedSignupAvatarColor = color;
+  renderAvatarColorPickers();
+}
+
+export function selectProfileAvatarColor(color) {
+  selectedProfileAvatarColor = color;
+  renderAvatarColorPickers();
+  const preview = document.getElementById('profile-avatar-preview');
+  if (preview) preview.style.background = color;
+}
+
+export function openAuthModal(initialTab = 'login') {
+  const modal = document.getElementById('auth-modal');
+  if (!modal) return;
+  modal.classList.add('active');
+  switchAuthTab(initialTab);
+  renderAvatarColorPickers();
+  const alertEl = document.getElementById('auth-alert-container');
+  if (alertEl) alertEl.style.display = 'none';
+}
+
+export function switchAuthTab(tab) {
+  const loginBtn = document.getElementById('auth-tab-btn-login');
+  const signupBtn = document.getElementById('auth-tab-btn-signup');
+  const loginForm = document.getElementById('auth-login-form');
+  const signupForm = document.getElementById('auth-signup-form');
+  const title = document.getElementById('auth-modal-title');
+  const alertEl = document.getElementById('auth-alert-container');
+  if (alertEl) alertEl.style.display = 'none';
+
+  if (tab === 'signup') {
+    if (loginBtn) loginBtn.classList.remove('active');
+    if (signupBtn) signupBtn.classList.add('active');
+    if (loginForm) loginForm.style.display = 'none';
+    if (signupForm) signupForm.style.display = 'block';
+    if (title) title.innerText = '✨ Create Free Account';
+    renderAvatarColorPickers();
+  } else {
+    if (loginBtn) loginBtn.classList.add('active');
+    if (signupBtn) signupBtn.classList.remove('active');
+    if (loginForm) loginForm.style.display = 'block';
+    if (signupForm) signupForm.style.display = 'none';
+    if (title) title.innerText = '🔑 Log In';
+  }
+}
+
+export function togglePasswordVisibility(inputId) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+export async function handleLoginSubmit(event) {
+  if (event) event.preventDefault();
+  const emailInput = document.getElementById('login-email');
+  const passwordInput = document.getElementById('login-password');
+  const alertEl = document.getElementById('auth-alert-container');
+  const submitBtn = document.getElementById('login-submit-btn');
+
+  const email = (emailInput?.value || '').trim();
+  const password = passwordInput?.value || '';
+
+  if (!email || !password) {
+    if (alertEl) {
+      alertEl.className = 'auth-alert-error';
+      alertEl.innerText = 'Please provide both email and password.';
+      alertEl.style.display = 'block';
+    }
+    return;
+  }
+
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.innerText = 'Logging in...';
+  }
+
+  const res = await apiLogin(email, password);
+
+  if (submitBtn) {
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = '<span>🔑 Log In to Settle Up</span>';
+  }
+
+  if (res.success && res.user) {
+    closeModal('auth-modal');
+    updateHeaderAuthUI();
+    showToast(`Welcome back, ${res.user.name}! 👋`);
+    if (emailInput) emailInput.value = '';
+    if (passwordInput) passwordInput.value = '';
+  } else {
+    if (alertEl) {
+      alertEl.className = 'auth-alert-error';
+      alertEl.innerText = res.error || 'Invalid email or password.';
+      alertEl.style.display = 'block';
+    }
+  }
+}
+
+export async function handleSignupSubmit(event) {
+  if (event) event.preventDefault();
+  const nameInput = document.getElementById('signup-name');
+  const emailInput = document.getElementById('signup-email');
+  const passwordInput = document.getElementById('signup-password');
+  const phoneInput = document.getElementById('signup-phone');
+  const upiInput = document.getElementById('signup-upi');
+  const alertEl = document.getElementById('auth-alert-container');
+  const submitBtn = document.getElementById('signup-submit-btn');
+
+  const name = (nameInput?.value || '').trim();
+  const email = (emailInput?.value || '').trim();
+  const password = passwordInput?.value || '';
+  const phone = (phoneInput?.value || '').trim();
+  const upiId = (upiInput?.value || '').trim();
+
+  if (!name || name.length < 2) {
+    if (alertEl) {
+      alertEl.className = 'auth-alert-error';
+      alertEl.innerText = 'Name must be at least 2 characters long.';
+      alertEl.style.display = 'block';
+    }
+    return;
+  }
+  if (!email) {
+    if (alertEl) {
+      alertEl.className = 'auth-alert-error';
+      alertEl.innerText = 'Valid email is required.';
+      alertEl.style.display = 'block';
+    }
+    return;
+  }
+  if (!password || password.length < 8) {
+    if (alertEl) {
+      alertEl.className = 'auth-alert-error';
+      alertEl.innerText = 'Password must be at least 8 characters long.';
+      alertEl.style.display = 'block';
+    }
+    return;
+  }
+
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.innerText = 'Creating account...';
+  }
+
+  const res = await apiRegister({
+    name,
+    email,
+    password,
+    phone,
+    upiId,
+    avatarColor: selectedSignupAvatarColor
+  });
+
+  if (submitBtn) {
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = '<span>✨ Create Free Account</span>';
+  }
+
+  if (res.success && res.user) {
+    closeModal('auth-modal');
+    updateHeaderAuthUI();
+    showToast(`Account created! Welcome to Settle Up, ${res.user.name}! 🎉`);
+    if (nameInput) nameInput.value = '';
+    if (emailInput) emailInput.value = '';
+    if (passwordInput) passwordInput.value = '';
+  } else {
+    if (alertEl) {
+      alertEl.className = 'auth-alert-error';
+      alertEl.innerText = res.error || 'Failed to create account.';
+      alertEl.style.display = 'block';
+    }
+  }
+}
+
+export function toggleUserDropdown(e) {
+  if (e) e.stopPropagation();
+  const menu = document.getElementById('user-header-dropdown');
+  if (menu) {
+    menu.classList.toggle('show');
+  }
+}
+
+export async function logoutAction() {
+  await apiLogout();
+  closeModal('user-profile-modal');
+  const menu = document.getElementById('user-header-dropdown');
+  if (menu) menu.classList.remove('show');
+  updateHeaderAuthUI();
+  showToast('Logged out successfully');
+}
+
+export async function openUserProfileModal() {
+  const menu = document.getElementById('user-header-dropdown');
+  if (menu) menu.classList.remove('show');
+
+  const user = getAuthenticatedUser();
+  if (!user) {
+    openAuthModal('login');
+    return;
+  }
+
+  const nameInput = document.getElementById('profile-name');
+  const emailInput = document.getElementById('profile-email');
+  const phoneInput = document.getElementById('profile-phone');
+  const upiInput = document.getElementById('profile-upi');
+  const pwdInput = document.getElementById('profile-new-password');
+  const preview = document.getElementById('profile-avatar-preview');
+  const dName = document.getElementById('profile-display-name');
+  const dEmail = document.getElementById('profile-display-email');
+  const alertEl = document.getElementById('profile-alert-container');
+
+  if (alertEl) alertEl.style.display = 'none';
+  if (nameInput) nameInput.value = user.name || '';
+  if (emailInput) emailInput.value = user.email || '';
+  if (phoneInput) phoneInput.value = user.phone || '';
+  if (upiInput) upiInput.value = user.upiId || '';
+  if (pwdInput) pwdInput.value = '';
+
+  selectedProfileAvatarColor = user.avatarColor || '#6366f1';
+  if (preview) {
+    preview.style.background = selectedProfileAvatarColor;
+    preview.innerText = (user.name || 'U').charAt(0).toUpperCase();
+  }
+  if (dName) dName.innerText = user.name || 'User';
+  if (dEmail) dEmail.innerText = user.email || '';
+
+  renderAvatarColorPickers();
+
+  const modal = document.getElementById('user-profile-modal');
+  if (modal) modal.classList.add('active');
+}
+
+export async function handleProfileUpdateSubmit(event) {
+  if (event) event.preventDefault();
+  const user = getAuthenticatedUser();
+  if (!user) return;
+
+  const nameInput = document.getElementById('profile-name');
+  const emailInput = document.getElementById('profile-email');
+  const phoneInput = document.getElementById('profile-phone');
+  const upiInput = document.getElementById('profile-upi');
+  const pwdInput = document.getElementById('profile-new-password');
+  const alertEl = document.getElementById('profile-alert-container');
+  const saveBtn = document.getElementById('profile-save-btn');
+
+  const name = (nameInput?.value || '').trim();
+  const email = (emailInput?.value || '').trim();
+  const phone = (phoneInput?.value || '').trim();
+  const upiId = (upiInput?.value || '').trim();
+  const password = pwdInput?.value || '';
+
+  if (!name || name.length < 2) {
+    if (alertEl) {
+      alertEl.className = 'auth-alert-error';
+      alertEl.innerText = 'Name must be at least 2 characters long.';
+      alertEl.style.display = 'block';
+    }
+    return;
+  }
+
+  const payload = {
+    name,
+    email,
+    phone,
+    upiId,
+    avatarColor: selectedProfileAvatarColor
+  };
+  if (password) {
+    if (password.length < 8) {
+      if (alertEl) {
+        alertEl.className = 'auth-alert-error';
+        alertEl.innerText = 'New password must be at least 8 characters long.';
+        alertEl.style.display = 'block';
+      }
+      return;
+    }
+    payload.password = password;
+  }
+
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.innerText = 'Saving...';
+  }
+
+  const res = await apiUpdateMe(payload);
+
+  if (saveBtn) {
+    saveBtn.disabled = false;
+    saveBtn.innerText = 'Save Changes';
+  }
+
+  if (res.success && res.user) {
+    closeModal('user-profile-modal');
+    updateHeaderAuthUI();
+    showToast('Profile updated successfully! ✨');
+  } else {
+    if (alertEl) {
+      alertEl.className = 'auth-alert-error';
+      alertEl.innerText = res.error || 'Failed to update profile.';
+      alertEl.style.display = 'block';
+    }
+  }
+}
+
+export function updateHeaderAuthUI() {
+  const container = document.getElementById('header-auth-container');
+  if (!container) return;
+
+  const user = getAuthenticatedUser();
+  if (user) {
+    const initial = (user.name || 'U').charAt(0).toUpperCase();
+    const color = user.avatarColor || '#6366f1';
+    container.innerHTML = `
+      <div class="user-dropdown-container">
+        <button class="user-header-pill" onclick="window.app.toggleUserDropdown(event)" title="Account menu">
+          <div class="user-header-avatar" style="background: ${color};">${escapeHtml(initial)}</div>
+          <span style="max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(user.name)}</span>
+          <span style="font-size: 0.65rem; opacity: 0.7;">▼</span>
+        </button>
+        <div id="user-header-dropdown" class="user-dropdown-menu">
+          <div style="padding: 0.4rem 0.75rem 0.2rem; font-size: 0.75rem; color: var(--text-muted); border-bottom: 1px solid var(--border-glass); margin-bottom: 0.25rem;">
+            Signed in as <strong>${escapeHtml(user.email || user.name)}</strong>
+          </div>
+          <button class="user-dropdown-item" onclick="window.app.openUserProfileModal()">
+            <span>👤</span>
+            <span>Profile & Settings</span>
+          </button>
+          <button class="user-dropdown-item" onclick="window.app.openCreateRoomModal()">
+            <span>🏠</span>
+            <span>My Trips & Hub</span>
+          </button>
+          <div style="height: 1px; background: var(--border-glass); margin: 0.2rem 0;"></div>
+          <button class="user-dropdown-item danger" onclick="window.app.logoutAction()">
+            <span>🚪</span>
+            <span>Log Out</span>
+          </button>
+        </div>
+      </div>
+    `;
+  } else {
+    container.innerHTML = `
+      <button id="header-login-btn" class="btn btn-secondary btn-sm" onclick="window.app.openAuthModal('login')" title="Log in to your account">
+        <span>🔑</span>
+        <span>Log In</span>
+      </button>
+      <button id="header-signup-btn" class="btn btn-primary btn-sm" onclick="window.app.openAuthModal('signup')" title="Create a new account">
+        <span>✨</span>
+        <span>Sign Up</span>
+      </button>
+    `;
+  }
+}
+
 // Expose functions on window for inline handlers
 window.app = {
   openAddExpenseModal,
@@ -2581,7 +3073,20 @@ window.app = {
   closeModal,
   validateMemberName,
   validateGoogleId,
-  validatePhoneNumber
+  validatePhoneNumber,
+  // Auth methods
+  openAuthModal,
+  switchAuthTab,
+  togglePasswordVisibility,
+  handleLoginSubmit,
+  handleSignupSubmit,
+  toggleUserDropdown,
+  logoutAction,
+  openUserProfileModal,
+  handleProfileUpdateSubmit,
+  renderAvatarColorPickers,
+  selectSignupAvatarColor,
+  selectProfileAvatarColor
 };
 
 // Initialize on DOM load or immediately if already ready
@@ -2590,3 +3095,4 @@ if (document.readyState === 'loading') {
 } else {
   initApp();
 }
+

@@ -7,6 +7,8 @@
 const STORAGE_PREFIX = 'settleup_room_';
 const LAST_ROOM_KEY = 'settleup_last_room_id';
 const USER_PROFILE_KEY = 'settleup_user_profile';
+const AUTH_TOKEN_KEY = 'settleup_auth_token';
+const AUTH_USER_KEY = 'settleup_auth_user';
 const API_BASE = '/api';
 
 export const CURRENCIES = {
@@ -276,10 +278,58 @@ export function setUrlRoomId(roomId) {
 }
 
 /* =========================================================================
-   User Profile Memory (for automatic applicant detection)
+   User Session & Authentication Memory
    ========================================================================= */
 
+export function getAuthToken() {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_KEY) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function setAuthToken(token) {
+  if (!token) return;
+  try {
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+  } catch (e) {}
+}
+
+export function clearAuthToken() {
+  try {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch (e) {}
+}
+
+export function getAuthenticatedUser() {
+  try {
+    const raw = localStorage.getItem(AUTH_USER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function setAuthenticatedUser(user) {
+  if (!user) return;
+  try {
+    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+  } catch (e) {}
+}
+
+export function clearAuth() {
+  try {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_USER_KEY);
+  } catch (e) {}
+}
+
 export function getUserProfile() {
+  const authUser = getAuthenticatedUser();
+  if (authUser) {
+    return authUser;
+  }
   try {
     const raw = localStorage.getItem(USER_PROFILE_KEY);
     return raw ? JSON.parse(raw) : null;
@@ -301,21 +351,26 @@ export function saveUserProfile(profile) {
 
 async function apiRequest(endpoint, options = {}) {
   try {
+    const headers = { ...(options.headers || {}) };
+    if (!(options.body instanceof FormData) && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
+    const token = getAuthToken();
+    if (token && !headers['Authorization']) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     const res = await fetch(`${API_BASE}${endpoint}`, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(options.headers || {})
-      },
-      ...options
+      ...options,
+      headers
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
-      return { ok: false, error: body.error || `HTTP error ${res.status}`, data: body };
+      return { ok: false, error: body.error || `HTTP error ${res.status}`, data: body, status: res.status };
     }
-    return { ok: true, data: body };
+    return { ok: true, data: body, status: res.status };
   } catch (err) {
     console.warn(`API call ${endpoint} offline/network error:`, err.message);
-    return { ok: false, error: err.message, offline: true };
+    return { ok: false, error: err.message, offline: true, status: 0 };
   }
 }
 
@@ -695,15 +750,47 @@ export async function apiDeleteExpense(roomId, expenseId) {
  */
 export async function apiAddSettlement(roomId, settlementData) {
   const normId = (roomId || 'GOA2026').toUpperCase();
-  const res = await apiRequest(`/rooms/${encodeURIComponent(normId)}/settlements`, {
-    method: 'POST',
-    body: JSON.stringify(settlementData)
-  });
+  let options = { method: 'POST' };
+
+  if (settlementData instanceof FormData) {
+    options.body = settlementData;
+  } else {
+    options.body = JSON.stringify(settlementData);
+  }
+
+  const res = await apiRequest(`/rooms/${encodeURIComponent(normId)}/settlements`, options);
   if (res.ok && res.data && res.data.room) {
     saveToLocalCache(res.data.room);
-    return { success: true, room: res.data.room, message: res.data.message };
+    return { success: true, room: res.data.room, settlement: res.data.settlement, message: res.data.message };
   }
   return { success: false, error: res.error || 'Failed to submit settlement' };
+}
+
+/**
+ * Uploads or updates a payment proof for a settlement
+ */
+export async function apiUploadSettlementProof(roomId, settlementId, fileOrBase64, { actorMemberId } = {}) {
+  const normId = (roomId || 'GOA2026').toUpperCase();
+  let options = { method: 'POST' };
+
+  if (fileOrBase64 instanceof File || fileOrBase64 instanceof Blob) {
+    const formData = new FormData();
+    formData.append('proof_file', fileOrBase64);
+    if (actorMemberId) formData.append('actorMemberId', actorMemberId);
+    options.body = formData;
+  } else {
+    options.body = JSON.stringify({
+      proofImage: fileOrBase64,
+      actorMemberId
+    });
+  }
+
+  const res = await apiRequest(`/rooms/${encodeURIComponent(normId)}/settlements/${encodeURIComponent(settlementId)}/proof`, options);
+  if (res.ok && res.data && res.data.room) {
+    saveToLocalCache(res.data.room);
+    return { success: true, room: res.data.room, settlement: res.data.settlement, message: res.data.message };
+  }
+  return { success: false, error: res.error || 'Failed to upload payment proof' };
 }
 
 /**
@@ -720,6 +807,54 @@ export async function apiUpdateSettlement(roomId, settlementId, updateData) {
     return { success: true, room: res.data.room, message: res.data.message };
   }
   return { success: false, error: res.error || 'Failed to update settlement' };
+}
+
+/**
+ * Confirms a settlement via REST API
+ */
+export async function apiConfirmSettlement(roomId, settlementId, { actorMemberId, confirmedBy } = {}) {
+  const normId = (roomId || 'GOA2026').toUpperCase();
+  const res = await apiRequest(`/rooms/${encodeURIComponent(normId)}/settlements/${encodeURIComponent(settlementId)}/confirm`, {
+    method: 'POST',
+    body: JSON.stringify({ actorMemberId, confirmedBy })
+  });
+  if (res.ok && res.data && res.data.room) {
+    saveToLocalCache(res.data.room);
+    return { success: true, room: res.data.room, settlement: res.data.settlement, message: res.data.message };
+  }
+  return { success: false, error: res.error || 'Failed to confirm settlement' };
+}
+
+/**
+ * Rejects a settlement via REST API
+ */
+export async function apiRejectSettlement(roomId, settlementId, { actorMemberId, rejectionReason, rejectionNotes } = {}) {
+  const normId = (roomId || 'GOA2026').toUpperCase();
+  const res = await apiRequest(`/rooms/${encodeURIComponent(normId)}/settlements/${encodeURIComponent(settlementId)}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ actorMemberId, rejectionReason, rejectionNotes })
+  });
+  if (res.ok && res.data && res.data.room) {
+    saveToLocalCache(res.data.room);
+    return { success: true, room: res.data.room, settlement: res.data.settlement, message: res.data.message };
+  }
+  return { success: false, error: res.error || 'Failed to reject settlement' };
+}
+
+/**
+ * Disputes a settlement via REST API
+ */
+export async function apiDisputeSettlement(roomId, settlementId, { actorMemberId, disputeNotes } = {}) {
+  const normId = (roomId || 'GOA2026').toUpperCase();
+  const res = await apiRequest(`/rooms/${encodeURIComponent(normId)}/settlements/${encodeURIComponent(settlementId)}/dispute`, {
+    method: 'POST',
+    body: JSON.stringify({ actorMemberId, disputeNotes })
+  });
+  if (res.ok && res.data && res.data.room) {
+    saveToLocalCache(res.data.room);
+    return { success: true, room: res.data.room, settlement: res.data.settlement, message: res.data.message };
+  }
+  return { success: false, error: res.error || 'Failed to dispute settlement' };
 }
 
 /**
@@ -762,15 +897,105 @@ export async function apiFetchRoomSimplification(roomId) {
 }
 
 /**
+ * Registers a new user account via REST API
+ */
+export async function apiRegister(registrationData) {
+  const res = await apiRequest('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(registrationData)
+  });
+  if (res.ok && res.data && res.data.user) {
+    if (res.data.token) {
+      setAuthToken(res.data.token);
+    }
+    setAuthenticatedUser(res.data.user);
+    return { success: true, user: res.data.user, token: res.data.token, message: res.data.message };
+  }
+  return { success: false, error: res.error || 'Failed to register account' };
+}
+
+/**
+ * Logs in with email and password via REST API
+ */
+export async function apiLogin(email, password) {
+  const res = await apiRequest('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password })
+  });
+  if (res.ok && res.data && res.data.user) {
+    if (res.data.token) {
+      setAuthToken(res.data.token);
+    }
+    setAuthenticatedUser(res.data.user);
+    return { success: true, user: res.data.user, token: res.data.token, message: res.data.message };
+  }
+  return { success: false, error: res.error || 'Invalid email or password' };
+}
+
+/**
+ * Logs out and clears user credentials
+ */
+export async function apiLogout() {
+  await apiRequest('/auth/logout', { method: 'POST' });
+  clearAuth();
+  return { success: true };
+}
+
+/**
+ * Fetches current authenticated user profile
+ */
+export async function apiGetMe() {
+  const res = await apiRequest('/auth/me');
+  if (res.ok && res.data && res.data.user) {
+    setAuthenticatedUser(res.data.user);
+    return res.data.user;
+  }
+  if (res.status === 401) {
+    clearAuth();
+  }
+  return null;
+}
+
+/**
+ * Updates current authenticated user profile
+ */
+export async function apiUpdateMe(updateData) {
+  const res = await apiRequest('/auth/me', {
+    method: 'PUT',
+    body: JSON.stringify(updateData)
+  });
+  if (res.ok && res.data && res.data.user) {
+    setAuthenticatedUser(res.data.user);
+    return { success: true, user: res.data.user, message: res.data.message };
+  }
+  return { success: false, error: res.error || 'Failed to update profile' };
+}
+
+/**
+ * Fetches user profile by ID (safe public or full if self)
+ */
+export async function apiGetUser(userId) {
+  const res = await apiRequest(`/users/${encodeURIComponent(userId)}`);
+  if (res.ok && res.data && res.data.user) {
+    return res.data.user;
+  }
+  return null;
+}
+
+/**
  * Syncs user profile with backend
  */
 export async function apiSyncUserProfile(profileData) {
   if (!profileData || !profileData.email) return null;
-  const res = await apiRequest('/users/register', {
+  const res = await apiRequest('/auth/register', {
     method: 'POST',
     body: JSON.stringify(profileData)
   });
   if (res.ok && res.data && res.data.user) {
+    if (res.data.token) {
+      setAuthToken(res.data.token);
+    }
+    setAuthenticatedUser(res.data.user);
     return res.data.user;
   }
   return null;

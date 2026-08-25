@@ -529,17 +529,19 @@ class InMemoryStore:
                 "amount": float(settlement_data.get("amount", 0)),
                 "currency": settlement_data.get("currency", room.get("currency", "USD")),
                 "paymentMethod": settlement_data.get("paymentMethod", "UPI"),
-                "status": settlement_data.get("status", "CONFIRMED"),
+                "status": settlement_data.get("status", "PROOF_SUBMITTED"),
                 "proofImage": settlement_data.get("proofImage", ""),
                 "transactionId": settlement_data.get("transactionId", ""),
                 "upiTxnId": settlement_data.get("upiTxnId", settlement_data.get("transactionId", "")),
                 "referenceNote": settlement_data.get("referenceNote", ""),
                 "timestamp": settlement_data.get("timestamp", now),
                 "submittedAt": settlement_data.get("submittedAt", now),
-                "confirmedAt": settlement_data.get("confirmedAt", now if settlement_data.get("status") == "CONFIRMED" else None),
+                "confirmedAt": settlement_data.get("confirmedAt"),
                 "confirmedBy": settlement_data.get("confirmedBy", ""),
+                "rejectedAt": settlement_data.get("rejectedAt"),
                 "rejectionReason": settlement_data.get("rejectionReason", ""),
                 "rejectionNotes": settlement_data.get("rejectionNotes", ""),
+                "disputedAt": settlement_data.get("disputedAt"),
                 "disputeNotes": settlement_data.get("disputeNotes", ""),
             }
             room.setdefault("settlements", []).append(new_set)
@@ -556,8 +558,12 @@ class InMemoryStore:
                 if s["id"] == settlement_id:
                     for key, val in update_data.items():
                         s[key] = val
-                    if update_data.get("status") == "CONFIRMED" and not s.get("confirmedAt"):
+                    if update_data.get("status") in ("CONFIRMED", "SETTLED") and not s.get("confirmedAt"):
                         s["confirmedAt"] = get_iso_now()
+                    elif update_data.get("status") == "REJECTED" and not s.get("rejectedAt"):
+                        s["rejectedAt"] = get_iso_now()
+                    elif update_data.get("status") == "DISPUTED" and not s.get("disputedAt"):
+                        s["disputedAt"] = get_iso_now()
                     break
             room["updatedAt"] = get_iso_now()
             return copy.deepcopy(room)

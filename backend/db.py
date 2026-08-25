@@ -43,6 +43,17 @@ def init_db(db_path=None):
         if 'archived_at' not in existing_cols:
             conn.execute("ALTER TABLE rooms ADD COLUMN archived_at TEXT")
 
+        cur.execute("PRAGMA table_info(settlements)")
+        set_cols = {col['name'] for col in cur.fetchall()}
+        if 'proof_filename' not in set_cols:
+            conn.execute("ALTER TABLE settlements ADD COLUMN proof_filename TEXT")
+        if 'proof_content_type' not in set_cols:
+            conn.execute("ALTER TABLE settlements ADD COLUMN proof_content_type TEXT")
+        if 'proof_size_bytes' not in set_cols:
+            conn.execute("ALTER TABLE settlements ADD COLUMN proof_size_bytes INTEGER")
+        if 'proof_uploaded_at' not in set_cols:
+            conn.execute("ALTER TABLE settlements ADD COLUMN proof_uploaded_at TEXT")
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS members (
                 id TEXT NOT NULL,
@@ -82,7 +93,7 @@ def init_db(db_path=None):
                 amount REAL NOT NULL,
                 currency TEXT NOT NULL DEFAULT 'USD',
                 payment_method TEXT NOT NULL DEFAULT 'UPI',
-                status TEXT NOT NULL DEFAULT 'CONFIRMED',
+                status TEXT NOT NULL DEFAULT 'PENDING',
                 proof_image TEXT,
                 transaction_id TEXT,
                 upi_txn_id TEXT,
@@ -91,8 +102,10 @@ def init_db(db_path=None):
                 submitted_at TEXT,
                 confirmed_at TEXT,
                 confirmed_by TEXT,
+                rejected_at TEXT,
                 rejection_reason TEXT,
                 rejection_notes TEXT,
+                disputed_at TEXT,
                 dispute_notes TEXT,
                 PRIMARY KEY (id, room_id),
                 FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
@@ -735,9 +748,9 @@ def add_settlement(room_id, settlement_data, db_path=None):
             INSERT INTO settlements (
                 id, room_id, from_member_id, to_member_id, amount, currency, payment_method, status,
                 proof_image, transaction_id, upi_txn_id, reference_note, timestamp, submitted_at,
-                confirmed_at, confirmed_by, rejection_reason, rejection_notes, dispute_notes
+                confirmed_at, confirmed_by, rejected_at, rejection_reason, rejection_notes, disputed_at, dispute_notes
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             settlement_id,
             normalized_id,
@@ -755,8 +768,10 @@ def add_settlement(room_id, settlement_data, db_path=None):
             settlement_data.get('submittedAt', now_iso),
             settlement_data.get('confirmedAt'),
             settlement_data.get('confirmedBy'),
+            settlement_data.get('rejectedAt'),
             settlement_data.get('rejectionReason'),
             settlement_data.get('rejectionNotes'),
+            settlement_data.get('disputedAt'),
             settlement_data.get('disputeNotes')
         ))
         conn.execute("UPDATE rooms SET updated_at = ? WHERE id = ?", (now_iso, normalized_id))
@@ -774,8 +789,10 @@ def update_settlement(room_id, settlement_id, update_data, db_path=None):
             'status': 'status',
             'confirmedAt': 'confirmed_at',
             'confirmedBy': 'confirmed_by',
+            'rejectedAt': 'rejected_at',
             'rejectionReason': 'rejection_reason',
             'rejectionNotes': 'rejection_notes',
+            'disputedAt': 'disputed_at',
             'disputeNotes': 'dispute_notes',
             'referenceNote': 'reference_note',
             'transactionId': 'transaction_id',

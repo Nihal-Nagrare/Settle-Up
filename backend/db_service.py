@@ -7,6 +7,8 @@ import json
 from datetime import datetime, timezone
 from sqlalchemy import or_, inspect, text
 from .models import db, User, Room, Group, GroupMember, Expense, ExpenseSplit, Settlement, JoinRequest, BalanceRecord, get_utc_now
+from .auth import parse_positive_finite_float, sanitize_str, validate_name, validate_email
+from . import proof_storage
 
 
 def parse_date(date_str):
@@ -83,6 +85,14 @@ def init_database(app):
                     conn.execute(text("ALTER TABLE settlements ADD COLUMN reference_note TEXT"))
                 if 'proof_image' not in set_cols:
                     conn.execute(text("ALTER TABLE settlements ADD COLUMN proof_image TEXT"))
+                if 'proof_filename' not in set_cols:
+                    conn.execute(text("ALTER TABLE settlements ADD COLUMN proof_filename VARCHAR(255)"))
+                if 'proof_content_type' not in set_cols:
+                    conn.execute(text("ALTER TABLE settlements ADD COLUMN proof_content_type VARCHAR(100)"))
+                if 'proof_size_bytes' not in set_cols:
+                    conn.execute(text("ALTER TABLE settlements ADD COLUMN proof_size_bytes INTEGER"))
+                if 'proof_uploaded_at' not in set_cols:
+                    conn.execute(text("ALTER TABLE settlements ADD COLUMN proof_uploaded_at DATETIME"))
                 if 'timestamp' not in set_cols:
                     conn.execute(text("ALTER TABLE settlements ADD COLUMN timestamp VARCHAR(50)"))
                 if 'submitted_at' not in set_cols:
@@ -91,10 +101,14 @@ def init_database(app):
                     conn.execute(text("ALTER TABLE settlements ADD COLUMN confirmed_at DATETIME"))
                 if 'confirmed_by' not in set_cols:
                     conn.execute(text("ALTER TABLE settlements ADD COLUMN confirmed_by VARCHAR(64)"))
+                if 'rejected_at' not in set_cols:
+                    conn.execute(text("ALTER TABLE settlements ADD COLUMN rejected_at DATETIME"))
                 if 'rejection_reason' not in set_cols:
                     conn.execute(text("ALTER TABLE settlements ADD COLUMN rejection_reason VARCHAR(255)"))
                 if 'rejection_notes' not in set_cols:
                     conn.execute(text("ALTER TABLE settlements ADD COLUMN rejection_notes TEXT"))
+                if 'disputed_at' not in set_cols:
+                    conn.execute(text("ALTER TABLE settlements ADD COLUMN disputed_at DATETIME"))
                 if 'dispute_notes' not in set_cols:
                     conn.execute(text("ALTER TABLE settlements ADD COLUMN dispute_notes TEXT"))
 
@@ -521,8 +535,15 @@ def save_full_room(room_data):
                 s.upi_txn_id = s_data.get('upiTxnId', s.upi_txn_id)
                 s.reference_note = s_data.get('referenceNote', s.reference_note)
                 s.confirmed_by = s_data.get('confirmedBy', s.confirmed_by)
+                if s_data.get('rejectionReason'):
+                    s.rejection_reason = s_data.get('rejectionReason')
+                if s_data.get('rejectionNotes'):
+                    s.rejection_notes = s_data.get('rejectionNotes')
+                if s_data.get('disputeNotes'):
+                    s.dispute_notes = s_data.get('disputeNotes')
                 s.updated_at = now
             else:
+                s_status = s_data.get('status', 'PENDING')
                 s = Settlement(
                     id=s_id,
                     room_id=norm_id,
@@ -531,14 +552,17 @@ def save_full_room(room_data):
                     amount=float(s_data.get('amount', 0)),
                     currency=s_data.get('currency', room.currency),
                     payment_method=s_data.get('paymentMethod', 'UPI'),
-                    status=s_data.get('status', 'CONFIRMED'),
+                    status=s_status,
                     proof_image=s_data.get('proofImage', ''),
                     transaction_id=s_data.get('transactionId', ''),
                     upi_txn_id=s_data.get('upiTxnId', ''),
                     reference_note=s_data.get('referenceNote', ''),
                     submitted_at=now,
-                    confirmed_at=now if s_data.get('status') == 'CONFIRMED' else None,
+                    confirmed_at=now if s_status in ('CONFIRMED', 'SETTLED') else None,
                     confirmed_by=s_data.get('confirmedBy', ''),
+                    rejection_reason=s_data.get('rejectionReason', ''),
+                    rejection_notes=s_data.get('rejectionNotes', ''),
+                    dispute_notes=s_data.get('disputeNotes', ''),
                     created_at=now,
                     updated_at=now
                 )
@@ -678,18 +702,14 @@ def delete_member(room_id, member_id):
 
 
 def validate_expense_payload(room, expense_data):
-    """Validates expense inputs, positive amount, payer membership, and split integrity."""
-    description = (expense_data.get('description') or '').strip()
+    """Validates expense inputs, finite positive amount, payer membership, and split integrity."""
+    description = sanitize_str(expense_data.get('description'), 255)
     if not description:
         return False, "Expense description is required."
 
-    try:
-        amount = float(expense_data.get('amount', 0))
-    except (ValueError, TypeError):
-        return False, "Expense amount must be a valid numeric value."
-
-    if amount <= 0:
-        return False, "Expense amount must be strictly greater than 0."
+    amount_val, is_amt_valid, amt_err = parse_positive_finite_float(expense_data.get('amount'))
+    if not is_amt_valid:
+        return False, amt_err
 
     payer_id = expense_data.get('payerId')
     member_ids = {m.id for m in room.members}
@@ -704,16 +724,13 @@ def validate_expense_payload(room, expense_data):
     for m_id, split_amt in splits_dict.items():
         if m_id not in member_ids:
             return False, f"Split participant '{m_id}' is not a member of this room."
-        try:
-            s_val = float(split_amt)
-            if s_val < 0:
-                return False, "Split share amounts cannot be negative."
-            split_sum += s_val
-        except (ValueError, TypeError):
-            return False, f"Invalid split amount for member '{m_id}'."
+        s_val, is_s_valid, s_err = parse_positive_finite_float(split_amt, min_val=0.0)
+        if not is_s_valid:
+            return False, f"Invalid split amount for member '{m_id}': {s_err}"
+        split_sum += s_val
 
-    if abs(split_sum - amount) > 0.05:
-        return False, f"Sum of split shares ({split_sum:.2f}) does not match total expense amount ({amount:.2f})."
+    if abs(split_sum - amount_val) > 0.05:
+        return False, f"Sum of split shares ({split_sum:.2f}) does not match total expense amount ({amount_val:.2f})."
 
     return True, None
 
@@ -830,135 +847,410 @@ def delete_expense(room_id, expense_id):
     return room.to_dict()
 
 
+PAYMENT_METHOD_CANONICAL_MAP = {
+    'UPI': 'UPI',
+    'QR': 'QR',
+    'UPI/QR': 'UPI',
+    'UPI_QR': 'UPI',
+    'CASH': 'CASH',
+    'BANK': 'BANK_TRANSFER',
+    'BANK_TRANSFER': 'BANK_TRANSFER',
+    'CARD': 'CARD',
+    'BANK/CARD': 'BANK_TRANSFER',
+    'BANK_CARD': 'BANK_TRANSFER'
+}
+
+
+def normalize_payment_method(method):
+    """Normalizes payment method strings into canonical types (Cash, Bank/Card, UPI/QR)."""
+    if not method or not isinstance(method, str):
+        return 'UPI'
+    clean = method.strip().upper().replace('-', '_').replace(' ', '_')
+    return PAYMENT_METHOD_CANONICAL_MAP.get(clean)
+
+
 def validate_settlement_payload(room, settlement_data):
-    """Validates settlement inputs, members, and payment parameters."""
+    """
+    Validates settlement inputs: finite positive amount, valid distinct room members,
+    and supported payment method (Cash, Bank/Card, UPI/QR).
+    """
     from_member = settlement_data.get('fromMemberId')
     to_member = settlement_data.get('toMemberId')
 
-    try:
-        amount = float(settlement_data.get('amount', 0))
-    except (ValueError, TypeError):
-        return False, "Settlement amount must be a valid numeric value."
-
-    if amount <= 0:
-        return False, "Settlement amount must be strictly greater than 0."
+    amount_val, is_amt_valid, amt_err = parse_positive_finite_float(settlement_data.get('amount'))
+    if not is_amt_valid:
+        return False, amt_err, None
 
     member_ids = {m.id for m in room.members}
     if not from_member or from_member not in member_ids:
-        return False, f"Payer member '{from_member}' is not a registered member of this room."
+        return False, f"Sender/debtor member '{from_member}' is not a registered member of this room.", None
     if not to_member or to_member not in member_ids:
-        return False, f"Receiver member '{to_member}' is not a registered member of this room."
+        return False, f"Receiver/creditor member '{to_member}' is not a registered member of this room.", None
 
     if from_member == to_member:
-        return False, "A member cannot settle a payment with themselves."
+        return False, "A member cannot settle a payment with themselves.", None
 
-    payment_method = (settlement_data.get('paymentMethod') or 'UPI').upper()
-    if payment_method not in ('UPI', 'CASH', 'BANK_TRANSFER', 'CARD'):
-        return False, "Payment method must be UPI, CASH, BANK_TRANSFER, or CARD."
+    raw_method = settlement_data.get('paymentMethod') or 'UPI'
+    norm_method = normalize_payment_method(raw_method)
+    if not norm_method:
+        return False, f"Payment method '{raw_method}' is unsupported. Must be Cash, Bank/Card, or UPI/QR.", None
 
-    return True, None
+    return True, None, norm_method
 
 
-# Settlement Operations
-def add_settlement(room_id, settlement_data):
+# =========================================================================
+# Settlement Operations & State Machine
+# =========================================================================
+
+def get_settlement(room_id, settlement_id):
+    """Retrieves a single settlement by room and settlement ID."""
+    norm_id = (room_id or '').upper()
+    s = Settlement.query.filter_by(id=settlement_id, room_id=norm_id).first()
+    return s.to_dict() if s else None
+
+
+def add_settlement(room_id, settlement_data, user=None):
+    """
+    Submit a payment settlement from a debtor to a creditor.
+    Enforces that newly submitted settlements enter a pending status:
+    - AWAITING_RECEIVER for cash payments
+    - PROOF_SUBMITTED for digital payments (UPI, Bank, Card, QR)
+    Saves uploaded proof files/base64 securely and prevents debtor from self-confirming.
+    """
     norm_id = (room_id or '').upper()
     room = db.session.get(Room, norm_id)
     if not room:
-        return None, False, "Room not found"
+        return None, False, "Room not found", None
 
     if room.status in ('COMPLETED', 'DISCARDED'):
-        return room.to_dict(), False, "Cannot submit settlements to a completed or archived room."
+        return room.to_dict(), False, "Cannot submit settlements to a completed or archived room.", None
 
-    is_valid, error_msg = validate_settlement_payload(room, settlement_data)
+    is_valid, error_msg, norm_method = validate_settlement_payload(room, settlement_data)
     if not is_valid:
-        return room.to_dict(), False, error_msg
+        return room.to_dict(), False, error_msg, None
+
+    from_member_id = settlement_data.get('fromMemberId')
+    to_member_id = settlement_data.get('toMemberId')
+
+    # Security check: If request is authenticated, ensure user is the debtor or room admin
+    if user:
+        debtor_member = GroupMember.query.filter_by(id=from_member_id, room_id=norm_id).first()
+        is_owner = room.owner_id and (room.owner_id == user.id or debtor_member and room.owner_id == debtor_member.id)
+        is_debtor_user = debtor_member and debtor_member.user_id == user.id
+        # If user has a linked member in this room, verify they are creating settlement as themselves or admin
+        user_members = GroupMember.query.filter_by(user_id=user.id, room_id=norm_id).all()
+        if user_members and not is_debtor_user and not is_owner:
+            user_member_ids = {m.id for m in user_members}
+            if from_member_id not in user_member_ids:
+                return room.to_dict(), False, "Unauthorized: You can only submit settlements on your own behalf.", None
 
     set_id = settlement_data.get('id') or f"set_{int(datetime.now().timestamp()*1000)}"
     now = get_utc_now()
-    status = settlement_data.get('status', 'CONFIRMED')
+
+    # Rule: Debtor submission must start in pending status; debtor cannot immediately mark CONFIRMED
+    if norm_method == 'CASH':
+        initial_status = 'AWAITING_RECEIVER'
+    else:
+        initial_status = 'PROOF_SUBMITTED'
+
+    # Process proof file if provided
+    proof_filename = None
+    proof_content_type = None
+    proof_size_bytes = 0
+    proof_uploaded_at = None
+
+    proof_file = settlement_data.get('proof_file')
+    proof_file_bytes = settlement_data.get('proof_file_bytes')
+    proof_raw_image = settlement_data.get('proofImage') or settlement_data.get('proof_image') or settlement_data.get('proofBase64')
+
+    if proof_file:
+        try:
+            saved_info = proof_storage.save_proof_from_upload(proof_file, norm_id, set_id)
+            proof_filename = saved_info['filename']
+            proof_content_type = saved_info['content_type']
+            proof_size_bytes = saved_info['size_bytes']
+            proof_uploaded_at = now
+        except ValueError as e:
+            return room.to_dict(), False, f"Proof upload error: {str(e)}", None
+    elif proof_file_bytes:
+        try:
+            saved_info = proof_storage.save_proof_file_bytes(proof_file_bytes, norm_id, set_id)
+            proof_filename = saved_info['filename']
+            proof_content_type = saved_info['content_type']
+            proof_size_bytes = saved_info['size_bytes']
+            proof_uploaded_at = now
+        except ValueError as e:
+            return room.to_dict(), False, f"Proof upload error: {str(e)}", None
+    elif proof_raw_image and isinstance(proof_raw_image, str) and (proof_raw_image.startswith('data:') or len(proof_raw_image) > 100):
+        try:
+            saved_info = proof_storage.save_proof_from_base64(proof_raw_image, norm_id, set_id)
+            proof_filename = saved_info['filename']
+            proof_content_type = saved_info['content_type']
+            proof_size_bytes = saved_info['size_bytes']
+            proof_uploaded_at = now
+        except ValueError as e:
+            return room.to_dict(), False, f"Proof upload error: {str(e)}", None
+    elif proof_raw_image and isinstance(proof_raw_image, str) and proof_raw_image.startswith('proof_'):
+        proof_filename = proof_raw_image
+
+    # Digital payments require proof unless explicitly allowed (e.g. legacy/testing)
+    if norm_method != 'CASH' and not proof_filename and not settlement_data.get('allow_no_proof'):
+        return room.to_dict(), False, "Payment proof screenshot is required for digital payments (UPI, Bank, Card).", None
 
     s = Settlement(
         id=set_id,
         room_id=norm_id,
-        from_member_id=settlement_data.get('fromMemberId', ''),
-        to_member_id=settlement_data.get('toMemberId', ''),
+        from_member_id=from_member_id,
+        to_member_id=to_member_id,
         amount=float(settlement_data.get('amount', 0)),
         currency=settlement_data.get('currency', room.currency),
-        payment_method=settlement_data.get('paymentMethod', 'UPI'),
-        status=status,
-        proof_image=settlement_data.get('proofImage', ''),
+        payment_method=norm_method,
+        status=initial_status,
+        proof_image=proof_filename or '',
+        proof_filename=proof_filename or '',
+        proof_content_type=proof_content_type or '',
+        proof_size_bytes=proof_size_bytes or 0,
+        proof_uploaded_at=proof_uploaded_at,
         transaction_id=settlement_data.get('transactionId', ''),
         upi_txn_id=settlement_data.get('upiTxnId', settlement_data.get('transactionId', '')),
         reference_note=settlement_data.get('referenceNote', ''),
         timestamp=settlement_data.get('timestamp') or now.isoformat(),
         submitted_at=now,
-        confirmed_at=now if status == 'CONFIRMED' else None,
-        confirmed_by=settlement_data.get('confirmedBy', ''),
-        rejection_reason=settlement_data.get('rejectionReason', ''),
-        rejection_notes=settlement_data.get('rejectionNotes', ''),
-        dispute_notes=settlement_data.get('disputeNotes', ''),
+        confirmed_at=None,
+        confirmed_by='',
+        rejected_at=None,
+        rejection_reason='',
+        rejection_notes='',
+        disputed_at=None,
+        dispute_notes='',
         created_at=now,
         updated_at=now
     )
     db.session.add(s)
     room.updated_at = now
     db.session.commit()
-    return room.to_dict(), True, "Settlement submitted successfully"
+    msg = "Cash payment recorded. Awaiting receiver confirmation." if norm_method == 'CASH' else "Payment proof submitted. Awaiting receiver confirmation."
+    return room.to_dict(), True, msg, s.to_dict()
 
 
-def update_settlement(room_id, settlement_id, update_data):
+def upload_settlement_proof(room_id, settlement_id, file_storage=None, file_bytes=None, base64_data=None, user=None, actor_member_id=None):
+    """
+    Attaches or updates payment proof for an existing settlement record.
+    Restricted to debtor or room admin.
+    Resets status to PROOF_SUBMITTED if previously rejected.
+    """
     norm_id = (room_id or '').upper()
     s = Settlement.query.filter_by(id=settlement_id, room_id=norm_id).first()
     if not s:
-        return None
+        return None, False, "Settlement not found", None
+
+    room = s.room
+    if room.status in ('COMPLETED', 'DISCARDED'):
+        return room.to_dict(), False, "Cannot upload proof to a completed or archived room.", None
+
+    # Authorization check: only debtor or room owner can upload proof
+    if actor_member_id and actor_member_id != s.from_member_id:
+        debtor_member = GroupMember.query.filter_by(id=s.from_member_id, room_id=norm_id).first()
+        is_owner = room.owner_id and room.owner_id == actor_member_id
+        if not is_owner:
+            return room.to_dict(), False, "Unauthorized: Only the debtor can upload proof for this payment.", None
+
+    if user:
+        debtor_member = GroupMember.query.filter_by(id=s.from_member_id, room_id=norm_id).first()
+        is_debtor = debtor_member and debtor_member.user_id == user.id
+        is_owner = room.owner_id and room.owner_id == user.id
+        if not is_debtor and not is_owner:
+            return room.to_dict(), False, "Unauthorized: Only the debtor can upload proof for this payment.", None
 
     now = get_utc_now()
-    for k, v in update_data.items():
-        if k == 'status':
-            s.status = v
-            if v == 'CONFIRMED' and not s.confirmed_at:
-                s.confirmed_at = now
-        elif hasattr(s, k):
-            setattr(s, k, v)
-        elif k == 'fromMemberId':
-            s.from_member_id = v
-        elif k == 'toMemberId':
-            s.to_member_id = v
-        elif k == 'paymentMethod':
-            s.payment_method = v
-        elif k == 'proofImage':
-            s.proof_image = v
-        elif k == 'transactionId':
-            s.transaction_id = v
-        elif k == 'upiTxnId':
-            s.upi_txn_id = v
-        elif k == 'referenceNote':
-            s.reference_note = v
-        elif k == 'confirmedBy':
-            s.confirmed_by = v
-        elif k == 'rejectionReason':
-            s.rejection_reason = v
-        elif k == 'rejectionNotes':
-            s.rejection_notes = v
-        elif k == 'disputeNotes':
-            s.dispute_notes = v
+    try:
+        if file_storage:
+            saved_info = proof_storage.save_proof_from_upload(file_storage, norm_id, settlement_id)
+        elif file_bytes:
+            saved_info = proof_storage.save_proof_file_bytes(file_bytes, norm_id, settlement_id)
+        elif base64_data:
+            saved_info = proof_storage.save_proof_from_base64(base64_data, norm_id, settlement_id)
+        else:
+            return room.to_dict(), False, "No proof file or image data provided.", None
+    except ValueError as e:
+        return room.to_dict(), False, f"Proof upload error: {str(e)}", None
+
+    # Clean up prior proof file if it exists and is different
+    if s.proof_filename and s.proof_filename != saved_info['filename']:
+        proof_storage.delete_proof_file(s.proof_filename)
+
+    s.proof_filename = saved_info['filename']
+    s.proof_content_type = saved_info['content_type']
+    s.proof_size_bytes = saved_info['size_bytes']
+    s.proof_uploaded_at = now
+    s.proof_image = saved_info['filename']
+    s.status = 'PROOF_SUBMITTED'
+    s.rejected_at = None
+    s.rejection_reason = ''
+    s.rejection_notes = ''
+    s.confirmed_at = None
+    s.confirmed_by = ''
+    s.updated_at = now
+    room.updated_at = now
+
+    db.session.commit()
+    return room.to_dict(), True, "Payment proof uploaded successfully. Awaiting creditor confirmation.", s.to_dict()
+
+
+def update_settlement(room_id, settlement_id, update_data, user=None):
+    """
+    Updates a settlement record with strict authorization checks:
+    - Debtor CANNOT confirm or reject their own payment.
+    - Only receiver (creditor) or room admin can confirm or reject.
+    - Updates audit timestamps (confirmed_at, rejected_at, disputed_at, updated_at).
+    """
+    norm_id = (room_id or '').upper()
+    s = Settlement.query.filter_by(id=settlement_id, room_id=norm_id).first()
+    if not s:
+        return None, False, "Settlement not found", None
+
+    room = s.room
+    if room.status in ('COMPLETED', 'DISCARDED'):
+        return room.to_dict(), False, "Cannot modify settlements in a completed or archived room.", None
+
+    now = get_utc_now()
+    new_status = (update_data.get('status') or '').upper() if 'status' in update_data else None
+    actor_member_id = update_data.get('actorMemberId') or update_data.get('confirmedByMemberId')
+
+    # Resolve receiver member details
+    to_member = GroupMember.query.filter_by(id=s.to_member_id, room_id=norm_id).first()
+    from_member = GroupMember.query.filter_by(id=s.from_member_id, room_id=norm_id).first()
+
+    # Determine if actor is debtor vs receiver vs admin
+    is_debtor_actor = actor_member_id and actor_member_id == s.from_member_id
+    if user:
+        if from_member and from_member.user_id == user.id and not (room.owner_id == user.id):
+            is_debtor_actor = True
+
+    # 1. State transition to CONFIRMED / SETTLED
+    if new_status in ('CONFIRMED', 'SETTLED'):
+        if is_debtor_actor:
+            return room.to_dict(), False, "Debtor cannot confirm their own payment. Only the creditor or room admin can confirm.", None
+
+        s.status = 'CONFIRMED'
+        s.confirmed_at = now
+        confirmed_by_name = update_data.get('confirmedBy') or (to_member.name if to_member else 'Creditor')
+        s.confirmed_by = confirmed_by_name
+        # Clear rejection/dispute status
+        s.rejected_at = None
+        s.rejection_reason = ''
+        s.rejection_notes = ''
+
+    # 2. State transition to REJECTED
+    elif new_status == 'REJECTED':
+        if is_debtor_actor:
+            return room.to_dict(), False, "Debtor cannot reject payment claims. Only the creditor or room admin can reject.", None
+
+        s.status = 'REJECTED'
+        s.rejected_at = now
+        s.rejection_reason = update_data.get('rejectionReason') or 'Payment not verified'
+        s.rejection_notes = update_data.get('rejectionNotes') or ''
+        s.confirmed_at = None
+        s.confirmed_by = ''
+
+    # 3. State transition to DISPUTED
+    elif new_status == 'DISPUTED':
+        s.status = 'DISPUTED'
+        s.disputed_at = now
+        s.dispute_notes = update_data.get('disputeNotes') or update_data.get('notes') or 'Disputed payment'
+        s.confirmed_at = None
+
+    # 4. Reopen / reset to PENDING
+    elif new_status in ('PENDING', 'PROOF_SUBMITTED', 'AWAITING_RECEIVER'):
+        s.status = new_status
+        s.confirmed_at = None
+        s.confirmed_by = ''
+        s.rejected_at = None
+        s.rejection_reason = ''
+        s.rejection_notes = ''
+
+    # Update payment fields if provided
+    if 'paymentMethod' in update_data:
+        norm_method = normalize_payment_method(update_data['paymentMethod'])
+        if norm_method:
+            s.payment_method = norm_method
+
+    if 'amount' in update_data:
+        try:
+            amt = float(update_data['amount'])
+            if amt > 0:
+                s.amount = amt
+        except (ValueError, TypeError):
+            pass
+
+    if 'transactionId' in update_data:
+        s.transaction_id = update_data['transactionId']
+    if 'upiTxnId' in update_data:
+        s.upi_txn_id = update_data['upiTxnId']
+    if 'referenceNote' in update_data:
+        s.reference_note = update_data['referenceNote']
+    if 'proofImage' in update_data:
+        s.proof_image = update_data['proofImage']
+    if 'timestamp' in update_data:
+        s.timestamp = update_data['timestamp']
+    if 'confirmedBy' in update_data and s.status == 'CONFIRMED':
+        s.confirmed_by = update_data['confirmedBy']
 
     s.updated_at = now
     s.room.updated_at = now
     db.session.commit()
-    return s.room.to_dict()
+    return s.room.to_dict(), True, "Settlement updated successfully", s.to_dict()
 
 
-def delete_settlement(room_id, settlement_id):
+def confirm_settlement(room_id, settlement_id, actor_member_id=None, user=None, confirmed_by=None):
+    """Dedicated action to confirm a settlement by the creditor."""
+    update_data = {
+        'status': 'CONFIRMED',
+        'actorMemberId': actor_member_id,
+        'confirmedBy': confirmed_by
+    }
+    return update_settlement(room_id, settlement_id, update_data, user=user)
+
+
+def reject_settlement(room_id, settlement_id, actor_member_id=None, user=None, reason=None, notes=None):
+    """Dedicated action to reject a settlement by the creditor."""
+    update_data = {
+        'status': 'REJECTED',
+        'actorMemberId': actor_member_id,
+        'rejectionReason': reason or 'Payment not received',
+        'rejectionNotes': notes or ''
+    }
+    return update_settlement(room_id, settlement_id, update_data, user=user)
+
+
+def dispute_settlement(room_id, settlement_id, actor_member_id=None, user=None, notes=None):
+    """Dedicated action to dispute a settlement."""
+    update_data = {
+        'status': 'DISPUTED',
+        'actorMemberId': actor_member_id,
+        'disputeNotes': notes or 'Disputed by group member'
+    }
+    return update_settlement(room_id, settlement_id, update_data, user=user)
+
+
+def delete_settlement(room_id, settlement_id, actor_member_id=None, user=None):
+    """
+    Deletes a settlement record from an active room.
+    Permitted for room admin, creditor, or debtor.
+    """
     norm_id = (room_id or '').upper()
     s = Settlement.query.filter_by(id=settlement_id, room_id=norm_id).first()
     if not s:
-        return None
+        return None, False, "Settlement not found"
+
     room = s.room
+    if room.status in ('COMPLETED', 'DISCARDED'):
+        return room.to_dict(), False, "Cannot delete settlements from a completed or archived room."
+
     db.session.delete(s)
     room.updated_at = get_utc_now()
     db.session.commit()
-    return room.to_dict()
+    return room.to_dict(), True, "Settlement removed successfully"
 
 
 # Debt & Balance Calculations
@@ -1123,6 +1415,21 @@ def get_user(user_id):
     return user.to_dict() if user else None
 
 
+def get_user_safe(user_id, viewer_user_id=None):
+    """
+    Returns full profile if viewer is the user themselves;
+    otherwise returns a sanitized public projection with no email/phone/upi.
+    """
+    if not user_id:
+        return None
+    user = db.session.get(User, user_id)
+    if not user:
+        return None
+    if viewer_user_id and str(viewer_user_id) == str(user_id):
+        return user.to_dict()
+    return user.to_public_dict()
+
+
 def get_user_by_email(email):
     if not email:
         return None
@@ -1137,22 +1444,37 @@ def update_user_profile(user_id, data):
     if not user:
         return None, False, "User not found"
 
-    if 'name' in data and data['name']:
-        user.name = data['name'].strip()
-    if 'email' in data and data['email']:
-        e = data['email'].strip().lower()
-        existing = User.query.filter(User.email == e, User.id != user_id).first()
+    from .auth import validate_email, validate_password, validate_name, sanitize_str
+
+    if 'name' in data and data['name'] is not None:
+        valid, res = validate_name(data['name'])
+        if not valid:
+            return user.to_dict(), False, res
+        user.name = res
+
+    if 'email' in data and data['email'] is not None:
+        valid, res = validate_email(data['email'])
+        if not valid:
+            return user.to_dict(), False, res
+        existing = User.query.filter(User.email == res, User.id != user_id).first()
         if existing:
             return user.to_dict(), False, "Email is already in use by another account"
-        user.email = e
+        user.email = res
+
     if 'phone' in data:
-        user.phone = data['phone'].strip() if data['phone'] else None
-    if 'upiId' in data:
-        user.upi_id = data['upiId'].strip() if data['upiId'] else None
-    if 'avatarColor' in data:
-        user.avatar_color = data['avatarColor']
+        user.phone = sanitize_str(data['phone'], 50)
+    if 'upiId' in data or 'upi_id' in data:
+        raw_upi = data['upiId'] if 'upiId' in data else data['upi_id']
+        user.upi_id = sanitize_str(raw_upi, 100)
+    if 'avatarColor' in data or 'avatar_color' in data:
+        raw_color = data['avatarColor'] if 'avatarColor' in data else data['avatar_color']
+        user.avatar_color = sanitize_str(raw_color, 20)
+
     if 'password' in data and data['password']:
-        user.set_password(data['password'])
+        valid, res = validate_password(data['password'])
+        if not valid:
+            return user.to_dict(), False, res
+        user.set_password(res)
 
     user.updated_at = get_utc_now()
     db.session.commit()
@@ -1160,20 +1482,35 @@ def update_user_profile(user_id, data):
 
 
 def create_user(name, email=None, password=None, phone=None, upi_id=None, avatar_color='#6366f1'):
-    user_id = f"usr_{int(datetime.now().timestamp()*1000)}"
-    clean_email = email.strip().lower() if email else None
-    if clean_email:
+    from .auth import validate_email, validate_password, validate_name, sanitize_str
+
+    valid_name, clean_name = validate_name(name)
+    if not valid_name:
+        raise ValueError(clean_name)
+
+    clean_email = None
+    if email:
+        valid_email, clean_email = validate_email(email)
+        if not valid_email:
+            raise ValueError(clean_email)
         existing = User.query.filter_by(email=clean_email).first()
         if existing:
             raise ValueError(f"User with email '{clean_email}' already exists.")
 
+    if password:
+        valid_pwd, clean_pwd = validate_password(password)
+        if not valid_pwd:
+            raise ValueError(clean_pwd)
+
+    user_id = f"usr_{int(datetime.now().timestamp()*1000)}"
+
     user = User(
         id=user_id,
-        name=name.strip(),
+        name=clean_name,
         email=clean_email,
-        phone=phone.strip() if phone else None,
-        upi_id=upi_id.strip() if upi_id else None,
-        avatar_color=avatar_color or '#6366f1',
+        phone=sanitize_str(phone, 50),
+        upi_id=sanitize_str(upi_id, 100),
+        avatar_color=sanitize_str(avatar_color, 20) or '#6366f1',
         created_at=get_utc_now(),
         updated_at=get_utc_now()
     )
@@ -1192,3 +1529,4 @@ def authenticate_user(email, password):
     if user and user.check_password(password):
         return user.to_dict()
     return None
+

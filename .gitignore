@@ -1,8 +1,42 @@
+# Environments and secrets
 .env
 .env.*
 !.env.example
 
+# Python bytecode and caches
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
 
+# Local databases and SQLite WAL files
 *.db
+*.db-journal
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Uploaded user payment proofs (keep folder structure via .gitkeep)
+uploads/proofs/*
+!uploads/proofs/.gitkeep
+uploads/test_proofs/
+
+# Logs and scratch output
+*.log
+*.jsonl
+brain/
+scratch/
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv/
+
+# OS and Editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

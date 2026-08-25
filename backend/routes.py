@@ -3,9 +3,12 @@ Settle Up - RESTful API Blueprint Routes (Database-backed)
 Handles rooms, members, expenses, settlements, join requests, and greedy debt simplification.
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, send_file, make_response
 from . import db_service
 from . import algorithm
+from . import proof_storage
+from .models import db, Room, Settlement, GroupMember
+from .auth import token_required, optional_auth, generate_auth_token, rate_limit
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -39,12 +42,17 @@ def search_rooms():
 
 
 @api_bp.route('/rooms', methods=['POST'])
+@optional_auth
 def create_or_save_room():
     """Create a new room or save full room data."""
     data = request.get_json() or {}
     room_id = (data.get('id') or '').strip().upper()
     if not room_id:
         return jsonify({'error': 'Room ID is required'}), 400
+
+    owner_id = data.get('ownerId')
+    if not owner_id and getattr(request, 'current_user', None):
+        owner_id = request.current_user.id
 
     if 'members' in data and 'expenses' in data:
         saved = db_service.save_full_room(data)
@@ -55,7 +63,7 @@ def create_or_save_room():
             name=data.get('name'),
             currency=data.get('currency', 'USD'),
             members=data.get('members'),
-            owner_id=data.get('ownerId')
+            owner_id=owner_id
         )
         return jsonify({'room': new_room, 'message': 'Room created successfully'}), 201
 
@@ -265,34 +273,251 @@ def delete_expense(room_id, expense_id):
 # Settlement routes
 @api_bp.route('/rooms/<room_id>/settlements', methods=['GET'])
 def list_settlements(room_id):
-    """List all settlements in a room."""
+    """List all settlements in a room, with optional status and member filtering."""
     room = db_service.get_room(room_id)
     if not room:
         return jsonify({'error': 'Room not found'}), 404
-    return jsonify({'settlements': room.get('settlements', [])}), 200
+
+    settlements = room.get('settlements', [])
+
+    # Optional status filter (?status=pending, confirmed, rejected, disputed, awaiting)
+    status_filter = request.args.get('status', '').strip().upper()
+    if status_filter:
+        if status_filter == 'AWAITING' or status_filter == 'PENDING':
+            settlements = [s for s in settlements if s.get('status') in ('PENDING', 'PROOF_SUBMITTED', 'AWAITING_RECEIVER')]
+        elif status_filter == 'CONFIRMED' or status_filter == 'SETTLED':
+            settlements = [s for s in settlements if not s.get('status') or s.get('status') in ('CONFIRMED', 'SETTLED')]
+        elif status_filter == 'REJECTED':
+            settlements = [s for s in settlements if s.get('status') == 'REJECTED']
+        elif status_filter == 'DISPUTED':
+            settlements = [s for s in settlements if s.get('status') == 'DISPUTED']
+
+    # Optional member filter (?member_id=mem_1)
+    member_id = request.args.get('member_id', '').strip()
+    if member_id:
+        settlements = [s for s in settlements if s.get('fromMemberId') == member_id or s.get('toMemberId') == member_id]
+
+    return jsonify({'settlements': settlements}), 200
+
+
+@api_bp.route('/rooms/<room_id>/settlements/<settlement_id>', methods=['GET'])
+def get_settlement_detail(room_id, settlement_id):
+    """Get single settlement details."""
+    s = db_service.get_settlement(room_id, settlement_id)
+    if not s:
+        return jsonify({'error': 'Settlement not found'}), 404
+    return jsonify({'settlement': s}), 200
 
 
 @api_bp.route('/rooms/<room_id>/settlements', methods=['POST'])
+@optional_auth
 def add_settlement(room_id):
-    """Submit a payment settlement."""
-    data = request.get_json() or {}
-    updated_room, success, msg = db_service.add_settlement(room_id, data)
+    """
+    Submit a payment settlement from debtor to creditor.
+    Supports application/json and multipart/form-data with attached proof file.
+    """
+    if request.is_json:
+        data = request.get_json() or {}
+    else:
+        # Support multipart/form-data
+        data = request.form.to_dict()
+        if 'proof_file' in request.files:
+            data['proof_file'] = request.files['proof_file']
+        elif 'proof' in request.files:
+            data['proof_file'] = request.files['proof']
+        elif 'file' in request.files:
+            data['proof_file'] = request.files['file']
+
+    user = getattr(request, 'current_user', None)
+    updated_room, success, msg, s_dict = db_service.add_settlement(room_id, data, user=user)
     if not success:
-        return jsonify({'error': msg}), 400
-    return jsonify({'room': updated_room, 'message': msg}), 201
+        status_code = 403 if ('unauthorized' in msg.lower() or 'debtor cannot' in msg.lower()) else 400
+        return jsonify({'error': msg}), status_code
+    return jsonify({'room': updated_room, 'settlement': s_dict, 'message': msg}), 201
+
+
+@api_bp.route('/rooms/<room_id>/settlements/<settlement_id>/proof', methods=['POST'])
+@optional_auth
+def upload_settlement_proof_action(room_id, settlement_id):
+    """
+    Upload or replace payment proof for an existing settlement.
+    Supports multipart/form-data and JSON with base64 data.
+    """
+    user = getattr(request, 'current_user', None)
+    actor_member_id = None
+    file_storage = None
+    base64_data = None
+
+    if request.is_json:
+        json_data = request.get_json() or {}
+        base64_data = json_data.get('proofImage') or json_data.get('proofBase64') or json_data.get('proof')
+        actor_member_id = json_data.get('actorMemberId')
+    else:
+        actor_member_id = request.form.get('actorMemberId')
+        file_storage = request.files.get('proof_file') or request.files.get('proof') or request.files.get('file')
+
+    updated_room, success, msg, s_dict = db_service.upload_settlement_proof(
+        room_id=room_id,
+        settlement_id=settlement_id,
+        file_storage=file_storage,
+        base64_data=base64_data,
+        user=user,
+        actor_member_id=actor_member_id
+    )
+
+    if not updated_room and not success:
+        return jsonify({'error': msg or 'Settlement not found'}), 404
+    if not success:
+        status_code = 403 if 'unauthorized' in msg.lower() else 400
+        return jsonify({'error': msg}), status_code
+
+    return jsonify({'room': updated_room, 'settlement': s_dict, 'message': msg}), 200
+
+
+@api_bp.route('/rooms/<room_id>/settlements/<settlement_id>/proof', methods=['GET'])
+@optional_auth
+def get_settlement_proof_file(room_id, settlement_id):
+    """
+    Secure, protected endpoint to view or download payment proof.
+    Authorization: Only authorized room members, creditors, debtors, or room owners can view.
+    Sends file with strict security headers preventing script execution (nosniff, private cache).
+    """
+    norm_id = (room_id or '').upper()
+    room = db.session.get(Room, norm_id)
+    if not room:
+        return jsonify({'error': 'Room not found', 'status': 404}), 404
+
+    s = Settlement.query.filter_by(id=settlement_id, room_id=norm_id).first()
+    if not s:
+        return jsonify({'error': 'Settlement not found', 'status': 404}), 404
+
+    proof_file_ref = s.proof_filename or s.proof_image
+    if not proof_file_ref or proof_file_ref.startswith('data:'):
+        return jsonify({'error': 'No file proof attached to this settlement', 'status': 404}), 404
+
+    # Authorization Verification
+    user = getattr(request, 'current_user', None)
+    is_authorized = False
+
+    if user:
+        if room.owner_id and room.owner_id == user.id:
+            is_authorized = True
+        else:
+            # Check if user is debtor, receiver, or room member
+            user_member = GroupMember.query.filter_by(user_id=user.id, room_id=norm_id).first()
+            if user_member:
+                is_authorized = True
+    else:
+        # For public/guest sessions, verify via member_id param or header
+        member_id = request.args.get('member_id') or request.headers.get('X-Member-Id')
+        if member_id:
+            mem = GroupMember.query.filter_by(id=member_id, room_id=norm_id).first()
+            if mem:
+                is_authorized = True
+
+    if not is_authorized:
+        return jsonify({'error': 'Forbidden: You are not authorized to view this payment proof', 'status': 403}), 403
+
+    # Safe path resolution (anti-directory traversal)
+    file_path, exists = proof_storage.resolve_proof_file_path(proof_file_ref)
+    if not exists or not file_path:
+        return jsonify({'error': 'Proof file does not exist on disk', 'status': 404}), 404
+
+    content_type = s.proof_content_type or 'image/jpeg'
+    ext = proof_storage.get_extension_for_mime(content_type)
+    safe_download_name = f"proof_{settlement_id}.{ext}"
+
+    response = make_response(send_file(
+        file_path,
+        mimetype=content_type,
+        as_attachment=False,
+        download_name=safe_download_name
+    ))
+
+    # Security Headers
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Cache-Control'] = 'private, no-transform, max-age=3600'
+    response.headers['Content-Disposition'] = f'inline; filename="{safe_download_name}"'
+    return response
 
 
 @api_bp.route('/rooms/<room_id>/settlements/<settlement_id>', methods=['PUT'])
+@optional_auth
 def update_settlement(room_id, settlement_id):
-    """Update settlement status or verification note."""
+    """Update settlement status or verification note with authorization checks."""
     data = request.get_json() or {}
-    updated_room = db_service.update_settlement(room_id, settlement_id, data)
-    if not updated_room:
-        return jsonify({'error': 'Room or settlement not found'}), 404
-    return jsonify({'room': updated_room, 'message': 'Settlement updated successfully'}), 200
+    user = getattr(request, 'current_user', None)
+    updated_room, success, msg, s_dict = db_service.update_settlement(room_id, settlement_id, data, user=user)
+    if not updated_room and not success:
+        return jsonify({'error': msg or 'Settlement not found'}), 404
+    if not success:
+        status_code = 403 if ('cannot' in msg.lower() or 'unauthorized' in msg.lower()) else 400
+        return jsonify({'error': msg}), status_code
+    return jsonify({'room': updated_room, 'settlement': s_dict, 'message': msg}), 200
+
+
+@api_bp.route('/rooms/<room_id>/settlements/<settlement_id>/confirm', methods=['POST'])
+@optional_auth
+def confirm_settlement_action(room_id, settlement_id):
+    """Explicit endpoint for creditor to confirm a settlement."""
+    data = request.get_json() or {}
+    user = getattr(request, 'current_user', None)
+    actor_member_id = data.get('actorMemberId') or data.get('confirmedByMemberId')
+    confirmed_by = data.get('confirmedBy')
+
+    updated_room, success, msg, s_dict = db_service.confirm_settlement(
+        room_id, settlement_id, actor_member_id=actor_member_id, user=user, confirmed_by=confirmed_by
+    )
+    if not updated_room and not success:
+        return jsonify({'error': msg or 'Settlement not found'}), 404
+    if not success:
+        status_code = 403 if ('cannot' in msg.lower() or 'unauthorized' in msg.lower()) else 400
+        return jsonify({'error': msg}), status_code
+    return jsonify({'room': updated_room, 'settlement': s_dict, 'message': 'Settlement confirmed successfully'}), 200
+
+
+@api_bp.route('/rooms/<room_id>/settlements/<settlement_id>/reject', methods=['POST'])
+@optional_auth
+def reject_settlement_action(room_id, settlement_id):
+    """Explicit endpoint for creditor to reject a settlement."""
+    data = request.get_json() or {}
+    user = getattr(request, 'current_user', None)
+    actor_member_id = data.get('actorMemberId')
+    reason = data.get('rejectionReason') or data.get('reason') or 'Payment not received'
+    notes = data.get('rejectionNotes') or data.get('notes') or ''
+
+    updated_room, success, msg, s_dict = db_service.reject_settlement(
+        room_id, settlement_id, actor_member_id=actor_member_id, user=user, reason=reason, notes=notes
+    )
+    if not updated_room and not success:
+        return jsonify({'error': msg or 'Settlement not found'}), 404
+    if not success:
+        status_code = 403 if ('cannot' in msg.lower() or 'unauthorized' in msg.lower()) else 400
+        return jsonify({'error': msg}), status_code
+    return jsonify({'room': updated_room, 'settlement': s_dict, 'message': 'Settlement rejected successfully'}), 200
+
+
+@api_bp.route('/rooms/<room_id>/settlements/<settlement_id>/dispute', methods=['POST'])
+@optional_auth
+def dispute_settlement_action(room_id, settlement_id):
+    """Explicit endpoint to flag a settlement as disputed."""
+    data = request.get_json() or {}
+    user = getattr(request, 'current_user', None)
+    actor_member_id = data.get('actorMemberId')
+    notes = data.get('disputeNotes') or data.get('notes') or 'Disputed payment'
+
+    updated_room, success, msg, s_dict = db_service.dispute_settlement(
+        room_id, settlement_id, actor_member_id=actor_member_id, user=user, notes=notes
+    )
+    if not updated_room and not success:
+        return jsonify({'error': msg or 'Settlement not found'}), 404
+    if not success:
+        return jsonify({'error': msg}), 400
+    return jsonify({'room': updated_room, 'settlement': s_dict, 'message': 'Settlement flagged as disputed'}), 200
 
 
 @api_bp.route('/rooms/<room_id>/settlements/<settlement_id>', methods=['DELETE'])
+@optional_auth
 def delete_settlement(room_id, settlement_id):
     """Delete a settlement record."""
     room = db_service.get_room(room_id)
@@ -301,10 +526,11 @@ def delete_settlement(room_id, settlement_id):
     if room.get('status') in ('COMPLETED', 'DISCARDED'):
         return jsonify({'error': 'Cannot delete settlements from a completed or archived room.'}), 400
 
-    updated_room = db_service.delete_settlement(room_id, settlement_id)
-    if not updated_room:
-        return jsonify({'error': 'Settlement not found'}), 404
-    return jsonify({'room': updated_room, 'message': 'Settlement removed successfully'}), 200
+    user = getattr(request, 'current_user', None)
+    updated_room, success, msg = db_service.delete_settlement(room_id, settlement_id, user=user)
+    if not success:
+        return jsonify({'error': msg}), 404
+    return jsonify({'room': updated_room, 'message': msg}), 200
 
 
 # Debt & Balance routes
@@ -347,9 +573,15 @@ def simplify_adhoc_debts():
     return jsonify({'simplification': result}), 200
 
 
-# User registration / profile routes
+# =========================================================================
+# Authentication & User Profile Routes
+# =========================================================================
+
+@api_bp.route('/auth/register', methods=['POST'])
 @api_bp.route('/users/register', methods=['POST'])
+@rate_limit(max_requests=15, window_seconds=60)
 def register_user():
+    """Register a new user account."""
     data = request.get_json() or {}
     name = (data.get('name') or '').strip()
     if not name:
@@ -361,39 +593,98 @@ def register_user():
             email=data.get('email'),
             password=data.get('password'),
             phone=data.get('phone'),
-            upi_id=data.get('upiId'),
-            avatar_color=data.get('avatarColor', '#6366f1')
+            upi_id=data.get('upiId') or data.get('upi_id'),
+            avatar_color=data.get('avatarColor') or data.get('avatar_color') or '#6366f1'
         )
-        return jsonify({'user': user, 'message': 'User registered successfully'}), 201
+        token = generate_auth_token(user['id'], user.get('email'))
+        return jsonify({
+            'user': user,
+            'token': token,
+            'message': 'User registered successfully'
+        }), 201
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
 
+@api_bp.route('/auth/login', methods=['POST'])
 @api_bp.route('/users/login', methods=['POST'])
+@rate_limit(max_requests=20, window_seconds=60)
 def login_user():
+    """Authenticate user with email and password."""
     data = request.get_json() or {}
     email = data.get('email')
     password = data.get('password')
+    if not email or not password:
+        return jsonify({'error': 'Email and password are required'}), 400
+
     user = db_service.authenticate_user(email, password)
     if not user:
         return jsonify({'error': 'Invalid email or password'}), 401
-    return jsonify({'user': user, 'message': 'Login successful'}), 200
+
+    token = generate_auth_token(user['id'], user.get('email'))
+    return jsonify({
+        'user': user,
+        'token': token,
+        'message': 'Login successful'
+    }), 200
+
+
+@api_bp.route('/auth/logout', methods=['POST'])
+def logout_user():
+    """Logout current user session."""
+    return jsonify({'success': True, 'message': 'Logged out successfully'}), 200
+
+
+@api_bp.route('/auth/me', methods=['GET'])
+@token_required
+def get_authenticated_user():
+    """Retrieve current authenticated user's full private profile."""
+    return jsonify({'user': request.current_user.to_dict()}), 200
+
+
+@api_bp.route('/auth/me', methods=['PUT'])
+@token_required
+def update_authenticated_user():
+    """Update current authenticated user's profile and settings."""
+    data = request.get_json() or {}
+    user, success, msg = db_service.update_user_profile(request.current_user.id, data)
+    if not success:
+        return jsonify({'error': msg}), 400
+    return jsonify({'user': user, 'message': msg}), 200
 
 
 @api_bp.route('/users/<user_id>', methods=['GET'])
+@optional_auth
 def get_user_profile(user_id):
-    """Retrieve user account profile."""
-    user = db_service.get_user(user_id)
+    """
+    Retrieve user account profile.
+    If viewed by the user themselves, returns full profile.
+    Otherwise returns safe public representation without exposing private email/phone/upi.
+    """
+    viewer_id = request.current_user.id if getattr(request, 'current_user', None) else None
+    user = db_service.get_user_safe(user_id, viewer_user_id=viewer_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
     return jsonify({'user': user}), 200
 
 
 @api_bp.route('/users/<user_id>', methods=['PUT'])
+@token_required
 def update_user_profile(user_id):
-    """Update user account profile."""
+    """
+    Update user account profile with authorization check.
+    Prevents users from modifying other users' private accounts.
+    """
+    if request.current_user.id != user_id:
+        return jsonify({
+            'error': 'Forbidden: You cannot modify another user\'s profile',
+            'status': 403,
+            'code': 'FORBIDDEN'
+        }), 403
+
     data = request.get_json() or {}
     user, success, msg = db_service.update_user_profile(user_id, data)
     if not success:
         return jsonify({'error': msg}), 400
     return jsonify({'user': user, 'message': msg}), 200
+

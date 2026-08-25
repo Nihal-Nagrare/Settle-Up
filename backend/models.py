@@ -62,6 +62,16 @@ class User(db.Model):
             'updatedAt': format_iso(self.updated_at)
         }
 
+    def to_public_dict(self):
+        """Safe public representation of user, omitting private email/phone/upi."""
+        return {
+            'id': self.id,
+            'name': self.name,
+            'avatarColor': self.avatar_color,
+            'createdAt': format_iso(self.created_at)
+        }
+
+
 
 class Room(db.Model):
     """Room / Group model representing an expense-sharing space."""
@@ -228,18 +238,24 @@ class Settlement(db.Model):
     to_member_id = db.Column(db.String(64), db.ForeignKey('members.id', ondelete='RESTRICT'), index=True, nullable=False)
     amount = db.Column(db.Float, nullable=False)
     currency = db.Column(db.String(10), default='USD', nullable=False)
-    payment_method = db.Column(db.String(30), default='UPI')  # UPI, CASH, BANK_TRANSFER, CARD
-    status = db.Column(db.String(20), default='CONFIRMED', index=True)  # PENDING, CONFIRMED, REJECTED, DISPUTED
+    payment_method = db.Column(db.String(30), default='UPI')  # UPI, CASH, BANK_TRANSFER, CARD, QR, etc.
+    status = db.Column(db.String(20), default='PENDING', index=True)  # PENDING, PROOF_SUBMITTED, AWAITING_RECEIVER, CONFIRMED, SETTLED, REJECTED, DISPUTED
     transaction_id = db.Column(db.String(100), nullable=True)
     upi_txn_id = db.Column(db.String(100), nullable=True)
     reference_note = db.Column(db.Text, nullable=True)
-    proof_image = db.Column(db.Text, nullable=True)
+    proof_image = db.Column(db.Text, nullable=True)  # File reference / safe storage key
+    proof_filename = db.Column(db.String(255), nullable=True)
+    proof_content_type = db.Column(db.String(100), nullable=True)
+    proof_size_bytes = db.Column(db.Integer, nullable=True)
+    proof_uploaded_at = db.Column(db.DateTime, nullable=True)
     timestamp = db.Column(db.String(50), nullable=True)
     submitted_at = db.Column(db.DateTime, default=get_utc_now)
     confirmed_at = db.Column(db.DateTime, nullable=True)
     confirmed_by = db.Column(db.String(64), nullable=True)
+    rejected_at = db.Column(db.DateTime, nullable=True)
     rejection_reason = db.Column(db.String(255), nullable=True)
     rejection_notes = db.Column(db.Text, nullable=True)
+    disputed_at = db.Column(db.DateTime, nullable=True)
     dispute_notes = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=get_utc_now)
     updated_at = db.Column(db.DateTime, default=get_utc_now, onupdate=get_utc_now)
@@ -248,15 +264,25 @@ class Settlement(db.Model):
     to_member = db.relationship('GroupMember', foreign_keys=[to_member_id])
 
     def to_dict(self):
+        has_proof = bool(self.proof_filename or (self.proof_image and str(self.proof_image).strip()))
+        proof_url = f"/api/rooms/{self.room_id}/settlements/{self.id}/proof" if has_proof else None
+
         return {
             'id': self.id,
+            'roomId': self.room_id,
             'fromMemberId': self.from_member_id,
             'toMemberId': self.to_member_id,
             'amount': round(float(self.amount), 2),
             'currency': self.currency,
             'paymentMethod': self.payment_method,
             'status': self.status,
-            'proofImage': self.proof_image or '',
+            'hasProof': has_proof,
+            'proofUrl': proof_url,
+            'proofImage': self.proof_image or (proof_url if has_proof else ''),
+            'proofFilename': self.proof_filename or '',
+            'proofContentType': self.proof_content_type or '',
+            'proofSizeBytes': self.proof_size_bytes or 0,
+            'proofUploadedAt': format_iso(self.proof_uploaded_at),
             'transactionId': self.transaction_id or '',
             'upiTxnId': self.upi_txn_id or self.transaction_id or '',
             'referenceNote': self.reference_note or '',
@@ -264,8 +290,10 @@ class Settlement(db.Model):
             'submittedAt': format_iso(self.submitted_at),
             'confirmedAt': format_iso(self.confirmed_at),
             'confirmedBy': self.confirmed_by or '',
+            'rejectedAt': format_iso(self.rejected_at),
             'rejectionReason': self.rejection_reason or '',
             'rejectionNotes': self.rejection_notes or '',
+            'disputedAt': format_iso(self.disputed_at),
             'disputeNotes': self.dispute_notes or '',
             'createdAt': format_iso(self.created_at),
             'updatedAt': format_iso(self.updated_at)
