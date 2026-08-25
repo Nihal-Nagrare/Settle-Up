@@ -64,19 +64,34 @@ html {
   font-family: var(--font-sans);
   background-color: var(--bg-main);
   color: var(--text-main);
-  scroll-behavior: smooth;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 body {
   min-height: 100vh;
+  min-height: 100dvh;
+  background-color: var(--bg-main);
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* Hardware-composited fixed background layer.
+   Decoupled from body scroll to eliminate CPU/GPU repaints during vertical scrolling. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
   background: 
     radial-gradient(circle at 10% 0%, rgba(99, 102, 241, 0.12) 0%, transparent 40%),
     radial-gradient(circle at 90% 15%, rgba(139, 92, 246, 0.1) 0%, transparent 35%),
     radial-gradient(circle at 50% 80%, rgba(16, 185, 129, 0.06) 0%, transparent 45%),
     var(--bg-main);
-  background-attachment: fixed;
-  overflow-x: hidden;
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 /* Typography Utilities */
@@ -106,12 +121,14 @@ body {
 /* Glassmorphism Card Style */
 .glass-card {
   background: var(--bg-surface-card);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--border-glass);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
   transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 .glass-card:hover {
@@ -122,6 +139,8 @@ body {
   background: var(--bg-surface-elevated);
   border: 1px solid var(--border-glass);
   border-radius: var(--radius-md);
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 /* Top App Header */
@@ -132,8 +151,9 @@ body {
   margin-bottom: 1.75rem;
   padding: 0.85rem 1.25rem;
   border-radius: var(--radius-lg);
-  background: rgba(15, 20, 31, 0.85);
-  backdrop-filter: blur(20px);
+  background: rgba(15, 20, 31, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-glass);
   box-shadow: var(--shadow-lg);
   display: flex;
@@ -141,6 +161,8 @@ body {
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 .brand-section {
@@ -201,7 +223,12 @@ body {
 .room-badge:hover {
   background: rgba(99, 102, 241, 0.22);
   border-color: rgba(99, 102, 241, 0.6);
-  transform: translateY(-1px);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .room-badge:hover {
+    transform: translateY(-1px);
+  }
 }
 
 /* Buttons */
@@ -217,10 +244,11 @@ body {
   font-weight: 600;
   border: 1px solid transparent;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
   text-decoration: none;
   white-space: nowrap;
   user-select: none;
+  transform: translateZ(0);
 }
 
 .btn-primary {
@@ -231,8 +259,13 @@ body {
 
 .btn-primary:hover {
   background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
-  transform: translateY(-1px);
   box-shadow: 0 6px 20px var(--primary-glow);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .btn-primary:hover {
+    transform: translateY(-1px);
+  }
 }
 
 .btn-emerald {
@@ -243,8 +276,13 @@ body {
 
 .btn-emerald:hover {
   background: linear-gradient(135deg, #059669 0%, #047857 100%);
-  transform: translateY(-1px);
   box-shadow: 0 6px 20px var(--accent-emerald-glow);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .btn-emerald:hover {
+    transform: translateY(-1px);
+  }
 }
 
 .btn-secondary {
@@ -344,14 +382,20 @@ body {
   padding: 0.45rem 0.8rem 0.45rem 0.55rem;
   border-radius: var(--radius-full);
   min-width: max-content;
-  transition: var(--transition-fast);
+  transition: border-color var(--transition-fast), background var(--transition-fast);
   cursor: pointer;
+  transform: translateZ(0);
 }
 
 .member-chip:hover {
   background: rgba(255, 255, 255, 0.07);
   border-color: var(--border-glass-hover);
-  transform: translateY(-2px);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .member-chip:hover {
+    transform: translateY(-2px);
+  }
 }
 
 .member-avatar {
@@ -579,7 +623,7 @@ body {
 /* Debt Cards Grid */
 .debts-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
   gap: 1.25rem;
 }
 
@@ -592,13 +636,20 @@ body {
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: linear-gradient(180deg, rgba(22, 30, 46, 0.85) 0%, rgba(15, 20, 31, 0.85) 100%);
-  transition: transform var(--transition-normal), border-color var(--transition-normal);
+  transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 .debt-card:hover {
-  transform: translateY(-3px);
   border-color: rgba(99, 102, 241, 0.35);
   box-shadow: var(--shadow-lg), 0 0 20px rgba(99, 102, 241, 0.15);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .debt-card:hover {
+    transform: translateY(-3px);
+  }
 }
 
 .debt-flow {
@@ -1337,7 +1388,12 @@ body {
 .proof-upload-zone:hover {
   border-color: var(--primary-light);
   background: rgba(99, 102, 241, 0.08);
-  transform: translateY(-1px);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .proof-upload-zone:hover {
+    transform: translateY(-1px);
+  }
 }
 
 .rejection-reasons-grid {
@@ -1426,21 +1482,72 @@ body {
 /* Responsive adjustments */
 @media (max-width: 768px) {
   .app-container {
-    padding: 1rem 0.75rem 4rem;
+    padding: 0.85rem 0.75rem 3.5rem;
   }
+
   .app-header {
     top: 0.5rem;
+    margin-bottom: 1.25rem;
+    padding: 0.75rem 1rem;
     flex-direction: column;
     align-items: stretch;
+    background: rgba(15, 20, 31, 0.94);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
   }
+
   .header-actions {
     justify-content: space-between;
   }
+
   .debts-grid {
     grid-template-columns: 1fr;
+    gap: 1rem;
   }
+
+  .debt-card {
+    padding: 1.25rem 1rem;
+  }
+
+  /* Mobile glassmorphism fallback: high-opacity surface avoids multi-layer blur fill-rate thrashing during touch scroll */
+  .glass-card {
+    background: rgba(18, 24, 38, 0.94);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: var(--shadow-md);
+  }
+
+  .glass-card-elevated {
+    background: rgba(22, 30, 46, 0.96);
+  }
+
   .category-grid-picker {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .stats-banner {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+  }
+
+  .stat-card {
+    padding: 1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .stats-banner {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-amount {
+    font-size: 1.15rem;
+  }
+
+  .party-avatar {
+    width: 42px;
+    height: 42px;
+    font-size: 1rem;
   }
 }
 
