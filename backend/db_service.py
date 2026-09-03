@@ -6,7 +6,7 @@ Provides ORM repository operations for Users, Rooms/Groups, Members, Expenses, S
 import json
 from datetime import datetime, timezone
 from sqlalchemy import or_, inspect, text
-from .models import db, User, Room, Group, GroupMember, Expense, ExpenseSplit, Settlement, JoinRequest, BalanceRecord, get_utc_now
+from .models import db, User, Room, Group, GroupMember, Expense, ExpenseSplit, Settlement, JoinRequest, BalanceRecord, RoomInvitation, get_utc_now
 from .auth import parse_positive_finite_float, sanitize_str, validate_name, validate_email
 from . import proof_storage
 
@@ -1529,4 +1529,310 @@ def authenticate_user(email, password):
     if user and user.check_password(password):
         return user.to_dict()
     return None
+
+
+# =========================================================================
+# Room Invitation Operations
+# =========================================================================
+
+def is_user_room_host_or_admin(room_id, user_id):
+    """
+    Checks if user is authorized as host or admin of a room.
+    Validates room owner_id or GroupMember role in ('HOST', 'ADMIN').
+    """
+    if not room_id or not user_id:
+        return False
+    norm_id = room_id.upper()
+    room = db.session.get(Room, norm_id)
+    if not room or room.status != 'ACTIVE':
+        return False
+
+    str_user_id = str(user_id)
+    if room.owner_id and str(room.owner_id) == str_user_id:
+        return True
+
+    user = db.session.get(User, str_user_id)
+    user_email = user.email.lower() if (user and user.email) else None
+
+    for m in room.members:
+        is_user_member = (m.user_id and str(m.user_id) == str_user_id) or (user_email and m.google_id and m.google_id.lower() == user_email)
+        if is_user_member:
+            if (m.role and m.role.upper() in ('HOST', 'ADMIN')) or (room.owner_id and str(room.owner_id) == str(m.id)):
+                return True
+
+    return False
+
+
+def is_user_room_member(room_id, user_id):
+    """Checks if a user is already a member of a room."""
+    if not room_id or not user_id:
+        return False
+    norm_id = room_id.upper()
+    room = db.session.get(Room, norm_id)
+    if not room:
+        return False
+
+    str_user_id = str(user_id)
+    user = db.session.get(User, str_user_id)
+    user_email = user.email.lower() if (user and user.email) else None
+
+    for m in room.members:
+        if m.user_id and str(m.user_id) == str_user_id:
+            return True
+        if user_email and m.google_id and m.google_id.lower() == user_email:
+            return True
+    return False
+
+
+def create_invitation(room_id, inviter_user_id, invitee_id_or_identifier, message=None, expires_at=None):
+    """
+    Creates a new room invitation for a target user.
+    Enforces authorization, active room, non-duplicate pending invite, non-self invite, non-existing member.
+    """
+    norm_id = (room_id or '').strip().upper()
+    if not norm_id:
+        return None, False, "Room ID is required", 400
+
+    room = db.session.get(Room, norm_id)
+    if not room:
+        return None, False, "Room not found", 404
+
+    if room.status != 'ACTIVE':
+        return None, False, "Cannot send invitations for closed or archived rooms.", 400
+
+    if not is_user_room_host_or_admin(norm_id, inviter_user_id):
+        return None, False, "Only authorized room hosts or admins can invite members.", 403
+
+    # Resolve target user by ID or Email
+    target_user = None
+    target_str = str(invitee_id_or_identifier or '').strip()
+    if target_str.startswith('usr_') or not '@' in target_str:
+        target_user = db.session.get(User, target_str)
+    if not target_user and '@' in target_str:
+        target_user = User.query.filter_by(email=target_str.lower()).first()
+
+    if not target_user:
+        return None, False, "Target user not found", 404
+
+    if str(target_user.id) == str(inviter_user_id):
+        return None, False, "You cannot invite yourself to a room.", 400
+
+    if is_user_room_member(norm_id, target_user.id):
+        return None, False, "Target user is already a member of this room.", 409
+
+    # Check for existing active/pending invitation
+    existing_invs = RoomInvitation.query.filter_by(
+        room_id=norm_id,
+        invitee_id=target_user.id,
+        status='PENDING'
+    ).all()
+
+    for inv in existing_invs:
+        if inv.is_expired():
+            inv.status = 'EXPIRED'
+            db.session.commit()
+        else:
+            return None, False, "Target user already has a pending invitation for this room.", 409
+
+    now = get_utc_now()
+    exp_dt = parse_date(expires_at) if expires_at else None
+
+    inv_id = f"inv_{int(datetime.now().timestamp()*1000)}"
+    invitation = RoomInvitation(
+        id=inv_id,
+        room_id=norm_id,
+        inviter_id=str(inviter_user_id),
+        invitee_id=target_user.id,
+        status='PENDING',
+        created_at=now,
+        expires_at=exp_dt,
+        message=sanitize_str(message, 500)
+    )
+
+    try:
+        db.session.add(invitation)
+        db.session.commit()
+        return invitation.to_dict(), True, "Invitation sent successfully", 201
+    except Exception as e:
+        db.session.rollback()
+        return None, False, f"Database error creating invitation: {str(e)}", 500
+
+
+def get_user_invitations(user_id):
+    """
+    Retrieves incoming invitations for a user, prioritizing PENDING invitations.
+    Lazily updates expired invitations on read.
+    """
+    if not user_id:
+        return {'invitations': [], 'pending_count': 0}
+
+    str_user_id = str(user_id)
+    invites = RoomInvitation.query.filter_by(invitee_id=str_user_id).all()
+
+    updated = False
+    for inv in invites:
+        if inv.is_expired():
+            inv.status = 'EXPIRED'
+            updated = True
+
+    if updated:
+        db.session.commit()
+
+    # Sort pending first (by created_at desc), then non-pending (by created_at desc)
+    pending_list = [i for i in invites if i.get_effective_status() == 'PENDING']
+    other_list = [i for i in invites if i.get_effective_status() != 'PENDING']
+
+    pending_list.sort(key=lambda x: x.created_at or datetime.min, reverse=True)
+    other_list.sort(key=lambda x: x.created_at or datetime.min, reverse=True)
+
+    combined = pending_list + other_list
+    return {
+        'invitations': [i.to_dict() for i in combined],
+        'pending_count': len(pending_list)
+    }
+
+
+def get_invitation_by_id(invitation_id, viewer_user_id=None):
+    """
+    Retrieves a single invitation with authorization checks.
+    Invitee, Inviter, or Room Host/Admin may view.
+    """
+    if not invitation_id:
+        return None, 404, "Invitation not found"
+
+    invitation = db.session.get(RoomInvitation, str(invitation_id))
+    if not invitation:
+        return None, 404, "Invitation not found"
+
+    if invitation.is_expired():
+        invitation.status = 'EXPIRED'
+        db.session.commit()
+
+    if viewer_user_id:
+        str_viewer = str(viewer_user_id)
+        is_invitee = (str(invitation.invitee_id) == str_viewer)
+        is_inviter = (str(invitation.inviter_id) == str_viewer)
+        is_host = is_user_room_host_or_admin(invitation.room_id, str_viewer)
+
+        if not (is_invitee or is_inviter or is_host):
+            return None, 403, "Access denied"
+
+    return invitation.to_dict(), 200, None
+
+
+def accept_invitation(invitation_id, user_id):
+    """
+    Accepts an invitation atomically: creates room membership and updates invitation status to ACCEPTED.
+    Rolls back transaction completely if either operation fails.
+    """
+    if not invitation_id or not user_id:
+        return None, False, "Invitation ID and User ID are required", 400
+
+    invitation = db.session.get(RoomInvitation, str(invitation_id))
+    if not invitation:
+        return None, False, "Invitation not found", 404
+
+    str_user_id = str(user_id)
+    if str(invitation.invitee_id) != str_user_id:
+        return None, False, "Only the designated invitee can accept this invitation.", 403
+
+    eff_status = invitation.get_effective_status()
+    if eff_status != 'PENDING':
+        return None, False, f"Invitation is {eff_status.lower()} and cannot be accepted.", 400
+
+    room = db.session.get(Room, invitation.room_id)
+    if not room or room.status != 'ACTIVE':
+        return None, False, "Room is no longer active.", 400
+
+    user = db.session.get(User, str_user_id)
+    if not user:
+        return None, False, "User account not found", 404
+
+    if is_user_room_member(invitation.room_id, str_user_id):
+        invitation.status = 'ACCEPTED'
+        invitation.responded_at = get_utc_now()
+        db.session.commit()
+        return invitation.to_dict(), True, "User is already a member of this room.", 200
+
+    now = get_utc_now()
+    mem_id = f"mem_{int(datetime.now().timestamp()*1000)}"
+
+    try:
+        # Atomic Transaction
+        with db.session.begin_nested():
+            gm = GroupMember(
+                id=mem_id,
+                room_id=invitation.room_id,
+                user_id=user.id,
+                name=user.name,
+                google_id=user.email,
+                phone_number=user.phone,
+                avatar_color=user.avatar_color or '#6366f1',
+                upi_id=user.upi_id or '',
+                role='MEMBER',
+                joined_at=now
+            )
+            db.session.add(gm)
+
+            invitation.status = 'ACCEPTED'
+            invitation.responded_at = now
+            room.updated_at = now
+
+        db.session.commit()
+        return invitation.to_dict(), True, "Invitation accepted and room membership created successfully", 200
+    except Exception as e:
+        db.session.rollback()
+        return None, False, f"Failed to accept invitation: {str(e)}", 500
+
+
+def decline_invitation(invitation_id, user_id):
+    """Declines a pending invitation."""
+    if not invitation_id or not user_id:
+        return None, False, "Invitation ID and User ID are required", 400
+
+    invitation = db.session.get(RoomInvitation, str(invitation_id))
+    if not invitation:
+        return None, False, "Invitation not found", 404
+
+    str_user_id = str(user_id)
+    if str(invitation.invitee_id) != str_user_id:
+        return None, False, "Only the designated invitee can decline this invitation.", 403
+
+    eff_status = invitation.get_effective_status()
+    if eff_status != 'PENDING':
+        return None, False, f"Invitation is {eff_status.lower()} and cannot be declined.", 400
+
+    now = get_utc_now()
+    invitation.status = 'DECLINED'
+    invitation.responded_at = now
+    db.session.commit()
+
+    return invitation.to_dict(), True, "Invitation declined successfully", 200
+
+
+def cancel_invitation(invitation_id, user_id):
+    """Cancels a pending invitation. Inviter or Room Host/Admin may cancel."""
+    if not invitation_id or not user_id:
+        return None, False, "Invitation ID and User ID are required", 400
+
+    invitation = db.session.get(RoomInvitation, str(invitation_id))
+    if not invitation:
+        return None, False, "Invitation not found", 404
+
+    str_user_id = str(user_id)
+    is_inviter = (str(invitation.inviter_id) == str_user_id)
+    is_host = is_user_room_host_or_admin(invitation.room_id, str_user_id)
+
+    if not (is_inviter or is_host):
+        return None, False, "Only the inviter or an authorized room host/admin can cancel this invitation.", 403
+
+    eff_status = invitation.get_effective_status()
+    if eff_status != 'PENDING':
+        return None, False, f"Invitation is {eff_status.lower()} and cannot be cancelled.", 400
+
+    invitation.status = 'CANCELLED'
+    db.session.commit()
+
+    return invitation.to_dict(), True, "Invitation cancelled successfully", 200
+
 

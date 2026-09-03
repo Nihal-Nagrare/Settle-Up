@@ -741,49 +741,89 @@
     </div>
   </div>
 
-  <!-- MODAL 4: Add Member Modal -->
+  <!-- MODAL 4: Invite / Add Member Modal -->
   <div id="add-member-modal" class="modal-overlay">
-    <div class="modal-dialog" style="max-width: 440px;">
+    <div class="modal-dialog" style="max-width: 460px;">
       <div class="modal-header">
-        <h3>👥 Add Trip Member</h3>
+        <h3 id="add-member-modal-title">✉️ Invite Member</h3>
         <button class="modal-close-btn" onclick="window.app.closeModal('add-member-modal')">✕</button>
       </div>
 
       <div class="modal-body">
-        <div class="form-group">
-          <label class="form-label" for="new-member-name">Member Name <span class="required-badge">*</span></label>
-          <input type="text" id="new-member-name" class="text-input" placeholder="e.g. Samantha, John..." autocomplete="name">
-          <span class="field-error" id="new-member-name-error"></span>
+        <!-- Sub-Tabs: Invite User vs Direct Add -->
+        <div class="hub-tabs" style="margin-bottom: 1rem;">
+          <button id="add-member-tab-invite" class="hub-tab-btn active" type="button" onclick="window.app.switchAddMemberTab('invite')">
+            <span>✉️ Send Invitation</span>
+          </button>
+          <button id="add-member-tab-direct" class="hub-tab-btn" type="button" onclick="window.app.switchAddMemberTab('direct')">
+            <span>➕ Direct Add</span>
+          </button>
         </div>
 
-        <div class="form-group">
-          <label class="form-label" for="new-member-google-id">Google ID / Gmail <span class="required-badge">*</span></label>
-          <input type="email" id="new-member-google-id" class="text-input" placeholder="e.g. samantha.doe@gmail.com" autocomplete="email">
-          <span class="field-error" id="new-member-google-id-error"></span>
-        </div>
+        <!-- Mode 1: Send Invitation -->
+        <div id="add-member-mode-invite">
+          <div id="invite-alert-container" style="display: none; padding: 0.65rem 0.85rem; border-radius: var(--radius-sm); margin-bottom: 1rem; font-size: 0.85rem;"></div>
 
-        <div class="form-group">
-          <label class="form-label" for="new-member-phone">Phone Number <span class="required-badge">*</span></label>
-          <input type="tel" id="new-member-phone" class="text-input" placeholder="e.g. +1 555-0199 or 9876543210" autocomplete="tel">
-          <span class="field-error" id="new-member-phone-error"></span>
-        </div>
+          <div class="form-group">
+            <label class="form-label" for="invite-user-identifier">User identifier <span class="required-badge">*</span></label>
+            <input type="text" id="invite-user-identifier" class="text-input" placeholder="Email address, phone number, or User ID (e.g. usr_123)" autocomplete="username">
+            <span class="field-error" id="invite-user-identifier-error"></span>
+          </div>
 
-        <div class="form-group">
-          <label class="form-label" for="new-member-upi">UPI ID / VPA (Optional)</label>
-          <input type="text" id="new-member-upi" class="text-input" placeholder="e.g. samantha@okhdfcbank">
-        </div>
+          <div class="form-group">
+            <label class="form-label" for="invite-message-input">Optional Note / Message</label>
+            <input type="text" id="invite-message-input" class="text-input" placeholder="e.g. Hey, join our Goa trip expenses!">
+          </div>
 
-        <div class="form-group">
-          <label class="form-label">Avatar Color</label>
-          <div id="member-color-picker" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-            <!-- Injected via JS -->
+          <p style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.5rem; line-height: 1.4;">
+            They will receive an invitation to join this room. Once accepted, they will be added as a room member.
+          </p>
+
+          <div class="modal-footer" style="padding-left: 0; padding-right: 0; padding-bottom: 0; margin-top: 1rem;">
+            <button class="btn btn-secondary" type="button" onclick="window.app.closeModal('add-member-modal')">Cancel</button>
+            <button id="send-invite-submit-btn" class="btn btn-primary" type="button" onclick="window.app.sendInvitationAction()">
+              <span>✉️ Send Invite</span>
+            </button>
           </div>
         </div>
-      </div>
 
-      <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="window.app.closeModal('add-member-modal')">Cancel</button>
-        <button class="btn btn-primary" onclick="window.app.saveNewMember()">Add Member</button>
+        <!-- Mode 2: Direct Add (Fallback for offline/preset rooms) -->
+        <div id="add-member-mode-direct" style="display: none;">
+          <div class="form-group">
+            <label class="form-label" for="new-member-name">Member Name <span class="required-badge">*</span></label>
+            <input type="text" id="new-member-name" class="text-input" placeholder="e.g. Samantha, John..." autocomplete="name">
+            <span class="field-error" id="new-member-name-error"></span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="new-member-google-id">Google ID / Gmail <span class="required-badge">*</span></label>
+            <input type="email" id="new-member-google-id" class="text-input" placeholder="e.g. samantha.doe@gmail.com" autocomplete="email">
+            <span class="field-error" id="new-member-google-id-error"></span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="new-member-phone">Phone Number <span class="required-badge">*</span></label>
+            <input type="tel" id="new-member-phone" class="text-input" placeholder="e.g. +1 555-0199 or 9876543210" autocomplete="tel">
+            <span class="field-error" id="new-member-phone-error"></span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="new-member-upi">UPI ID / VPA (Optional)</label>
+            <input type="text" id="new-member-upi" class="text-input" placeholder="e.g. samantha@okhdfcbank">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Avatar Color</label>
+            <div id="member-color-picker" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+              <!-- Injected via JS -->
+            </div>
+          </div>
+
+          <div class="modal-footer" style="padding-left: 0; padding-right: 0; padding-bottom: 0; margin-top: 1rem;">
+            <button class="btn btn-secondary" type="button" onclick="window.app.closeModal('add-member-modal')">Cancel</button>
+            <button class="btn btn-primary" type="button" onclick="window.app.saveNewMember()">Add Member</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -950,7 +990,7 @@
     </div>
   </div>
 
-  <!-- MODAL 7: Upgraded Room Hub (Active, Find Groups, Join Requests, Archived, Create) -->
+  <!-- MODAL 7: Upgraded Room Hub (Active, Invitations, Find Groups, Join Requests, Archived, Create) -->
   <div id="create-room-modal" class="modal-overlay">
     <div class="modal-dialog" style="max-width: 580px;">
       <div class="modal-header">
@@ -963,6 +1003,10 @@
         <div class="hub-tabs">
           <button class="hub-tab-btn active" data-hubtab="active" onclick="window.app.switchHubTab('active')">
             <span>🌟 Active Trips</span>
+          </button>
+          <button class="hub-tab-btn" data-hubtab="invitations" onclick="window.app.switchHubTab('invitations')">
+            <span>✉️ Invitations</span>
+            <span id="hub-invitations-badge" class="badge-counter" style="display: none;">0</span>
           </button>
           <button class="hub-tab-btn" data-hubtab="search" onclick="window.app.switchHubTab('search')">
             <span>🔍 Find a Group</span>
@@ -978,6 +1022,60 @@
             <span>➕ Create New</span>
           </button>
         </div>
+
+        <!-- HUB TAB 1: Active Rooms -->
+        <div id="hub-tab-view-active">
+          <div class="form-label" style="margin-bottom: 0.5rem;">Your Active Trips</div>
+          <div id="saved-rooms-list" style="max-height: 320px; overflow-y: auto;">
+            <!-- Injected via JS -->
+          </div>
+        </div>
+
+        <!-- HUB TAB: Invitations (My Incoming + Room Pending) -->
+        <div id="hub-tab-view-invitations" style="display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+            <div class="form-label" style="margin: 0;">My Room Invitations</div>
+            <button class="btn btn-secondary btn-sm" onclick="window.app.refreshUserInvitationsList()">🔄 Refresh</button>
+          </div>
+          <div id="user-invitations-list" style="max-height: 320px; overflow-y: auto;">
+            <!-- Injected via JS -->
+          </div>
+
+          <!-- Pending Room Invitations Section (Host/Admin view) -->
+          <div id="room-pending-invitations-section" style="margin-top: 1.25rem; display: none;">
+            <div class="form-label" style="margin-bottom: 0.5rem;">Room Pending Invitations (Sent by Host)</div>
+            <div id="room-pending-invitations-list" style="max-height: 200px; overflow-y: auto;">
+              <!-- Injected via JS -->
+            </div>
+          </div>
+        </div>
+
+        <!-- HUB TAB 2: Find / Search Groups -->
+        <div id="hub-tab-view-search" style="display: none;">
+          <div class="form-group">
+            <div class="search-box">
+              <span>🔍</span>
+              <input type="text" id="group-search-input" placeholder="Search by group name or room ID..." oninput="window.app.onGroupSearchInput(event)">
+            </div>
+          </div>
+          <div id="group-search-results" style="max-height: 300px; overflow-y: auto;">
+            <div style="text-align: center; color: var(--text-muted); padding: 1.5rem 0; font-size: 0.85rem;">
+              Type a group name or room ID above to find and request entry into trips.
+            </div>
+          </div>
+        </div>
+
+        <!-- HUB TAB 3: Join Requests (Admin Approval) -->
+        <div id="hub-tab-view-requests" style="display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+            <div class="form-label" style="margin: 0;">Pending Join Requests for <strong id="hub-current-room-name" class="font-mono">Current Room</strong></div>
+            <button class="btn btn-secondary btn-sm" onclick="window.app.refreshJoinRequestsList()">🔄 Refresh</button>
+          </div>
+          <div id="join-requests-list" style="max-height: 320px; overflow-y: auto;">
+            <!-- Injected via JS -->
+          </div>
+        </div>
+
 
         <!-- HUB TAB 1: Active Rooms -->
         <div id="hub-tab-view-active">

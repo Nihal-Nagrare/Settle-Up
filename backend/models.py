@@ -354,3 +354,61 @@ class BalanceRecord(db.Model):
             'totalOwed': round(float(self.total_owed), 2),
             'lastCalculatedAt': format_iso(self.last_calculated_at)
         }
+
+
+class RoomInvitation(db.Model):
+    """Invitation issued by room host/admin to a target user."""
+    __tablename__ = 'room_invitations'
+
+    id = db.Column(db.String(64), primary_key=True)
+    room_id = db.Column(db.String(64), db.ForeignKey('rooms.id', ondelete='CASCADE'), index=True, nullable=False)
+    inviter_id = db.Column(db.String(64), db.ForeignKey('users.id', ondelete='CASCADE'), index=True, nullable=False)
+    invitee_id = db.Column(db.String(64), db.ForeignKey('users.id', ondelete='CASCADE'), index=True, nullable=False)
+    status = db.Column(db.String(20), default='PENDING', index=True, nullable=False)  # PENDING, ACCEPTED, DECLINED, CANCELLED, EXPIRED
+    created_at = db.Column(db.DateTime, default=get_utc_now, nullable=False)
+    responded_at = db.Column(db.DateTime, nullable=True)
+    expires_at = db.Column(db.DateTime, nullable=True)
+    message = db.Column(db.Text, nullable=True)
+
+    # Relationships
+    room = db.relationship('Room', foreign_keys=[room_id])
+    inviter = db.relationship('User', foreign_keys=[inviter_id])
+    invitee = db.relationship('User', foreign_keys=[invitee_id])
+
+    def is_expired(self):
+        if self.status == 'PENDING' and self.expires_at:
+            now = get_utc_now()
+            exp = self.expires_at
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if now > exp:
+                return True
+        return False
+
+    def get_effective_status(self):
+        if self.is_expired():
+            return 'EXPIRED'
+        return self.status
+
+    def to_dict(self):
+        eff_status = self.get_effective_status()
+        return {
+            'id': self.id,
+            'status': eff_status,
+            'room_id': self.room_id,
+            'roomId': self.room_id,
+            'room': {
+                'id': self.room.id,
+                'name': self.room.name
+            } if self.room else {'id': self.room_id},
+            'inviter': self.inviter.to_public_dict() if self.inviter else {'id': self.inviter_id},
+            'invitee': self.invitee.to_public_dict() if self.invitee else {'id': self.invitee_id},
+            'message': self.message or '',
+            'created_at': format_iso(self.created_at),
+            'createdAt': format_iso(self.created_at),
+            'responded_at': format_iso(self.responded_at),
+            'respondedAt': format_iso(self.responded_at),
+            'expires_at': format_iso(self.expires_at),
+            'expiresAt': format_iso(self.expires_at)
+        }
+

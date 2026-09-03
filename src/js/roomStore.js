@@ -1025,3 +1025,92 @@ export function formatCurrency(amount, currencyCode = 'USD') {
   const num = Number(amount) || 0;
   return `${curr.symbol}${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
+
+/* =========================================================================
+   Room Invitation API Helpers
+   ========================================================================= */
+
+/**
+ * Creates a room invitation via REST API (POST /api/rooms/<room_id>/invitations)
+ */
+export async function apiCreateInvitation(roomId, inviteeId, { message, expiresAt } = {}) {
+  const normId = (roomId || 'GOA2026').toUpperCase();
+  const res = await apiRequest(`/rooms/${encodeURIComponent(normId)}/invitations`, {
+    method: 'POST',
+    body: JSON.stringify({
+      invitee_id: inviteeId,
+      message,
+      expires_at: expiresAt
+    })
+  });
+  if (res.ok && res.data && res.data.invitation) {
+    return { success: true, invitation: res.data.invitation, message: res.data.message || 'Invitation sent successfully.', status: res.status };
+  }
+  return { success: false, error: res.error || 'Failed to send invitation', status: res.status, data: res.data };
+}
+
+/**
+ * Fetches invitations for the current user (GET /api/invitations)
+ */
+export async function apiGetUserInvitations() {
+  const res = await apiRequest('/invitations');
+  if (res.ok && res.data) {
+    return {
+      success: true,
+      invitations: res.data.invitations || [],
+      pendingCount: res.data.pending_count || 0
+    };
+  }
+  return { success: false, invitations: [], pendingCount: 0, error: res.error };
+}
+
+/**
+ * Fetches single invitation by ID (GET /api/invitations/<invitation_id>)
+ */
+export async function apiGetInvitation(invitationId) {
+  const res = await apiRequest(`/invitations/${encodeURIComponent(invitationId)}`);
+  if (res.ok && res.data && res.data.invitation) {
+    return { success: true, invitation: res.data.invitation };
+  }
+  return { success: false, error: res.error || 'Invitation not found', status: res.status };
+}
+
+/**
+ * Accepts a room invitation (POST /api/invitations/<invitation_id>/accept)
+ */
+export async function apiAcceptInvitation(invitationId) {
+  const res = await apiRequest(`/invitations/${encodeURIComponent(invitationId)}/accept`, {
+    method: 'POST'
+  });
+  if (res.ok && res.data && res.data.invitation) {
+    return { success: true, invitation: res.data.invitation, message: res.data.message || 'Invitation accepted successfully', status: res.status };
+  }
+  return { success: false, error: res.error || 'Failed to accept invitation', status: res.status };
+}
+
+/**
+ * Declines a room invitation (POST /api/invitations/<invitation_id>/decline)
+ */
+export async function apiDeclineInvitation(invitationId) {
+  const res = await apiRequest(`/invitations/${encodeURIComponent(invitationId)}/decline`, {
+    method: 'POST'
+  });
+  if (res.ok && res.data && res.data.invitation) {
+    return { success: true, invitation: res.data.invitation, message: res.data.message || 'Invitation declined', status: res.status };
+  }
+  return { success: false, error: res.error || 'Failed to decline invitation', status: res.status };
+}
+
+/**
+ * Cancels a pending room invitation (DELETE /api/invitations/<invitation_id>)
+ */
+export async function apiCancelInvitation(invitationId) {
+  const res = await apiRequest(`/invitations/${encodeURIComponent(invitationId)}`, {
+    method: 'DELETE'
+  });
+  if (res.ok && res.data && res.data.invitation) {
+    return { success: true, invitation: res.data.invitation, message: res.data.message || 'Invitation cancelled', status: res.status };
+  }
+  return { success: false, error: res.error || 'Failed to cancel invitation', status: res.status };
+}
+

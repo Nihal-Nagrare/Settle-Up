@@ -54,7 +54,9 @@
 }
 
 /* Base Resets */
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
@@ -85,7 +87,7 @@ body::before {
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  background: 
+  background:
     radial-gradient(circle at 10% 0%, rgba(99, 102, 241, 0.12) 0%, transparent 40%),
     radial-gradient(circle at 90% 15%, rgba(139, 92, 246, 0.1) 0%, transparent 35%),
     radial-gradient(circle at 50% 80%, rgba(16, 185, 129, 0.06) 0%, transparent 45%),
@@ -188,6 +190,7 @@ body::before {
   font-weight: 800;
   letter-spacing: -0.025em;
   line-height: 1.15;
+  word-break: break-word;
 }
 
 .brand-info p {
@@ -317,7 +320,8 @@ body::before {
 }
 
 /* Select & Inputs */
-.select-input, .text-input {
+.select-input,
+.text-input {
   background: var(--bg-surface);
   border: 1px solid var(--border-glass);
   color: var(--text-main);
@@ -329,7 +333,8 @@ body::before {
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.select-input:focus, .text-input:focus {
+.select-input:focus,
+.text-input:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px var(--primary-glow);
 }
@@ -421,6 +426,10 @@ body::before {
   font-size: 0.82rem;
   font-weight: 600;
   color: var(--text-main);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .member-balance {
@@ -1010,7 +1019,11 @@ body::before {
   width: 100%;
   max-width: 540px;
   max-height: 90vh;
-  overflow-y: auto;
+  max-height: calc(100dvh - 2rem);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
   transform: scale(0.95) translateY(10px);
   transition: transform var(--transition-normal);
 }
@@ -1025,6 +1038,7 @@ body::before {
   justify-content: space-between;
   padding: 1.25rem 1.5rem;
   border-bottom: 1px solid var(--border-glass);
+  flex-shrink: 0;
 }
 
 .modal-header h3 {
@@ -1045,6 +1059,7 @@ body::before {
   align-items: center;
   justify-content: center;
   transition: var(--transition-fast);
+  flex-shrink: 0;
 }
 
 .modal-close-btn:hover {
@@ -1057,6 +1072,12 @@ body::before {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .modal-footer {
@@ -1066,6 +1087,7 @@ body::before {
   gap: 0.75rem;
   padding: 1.25rem 1.5rem;
   border-top: 1px solid var(--border-glass);
+  flex-shrink: 0;
 }
 
 /* Form Groups */
@@ -1116,6 +1138,7 @@ body::before {
     opacity: 0;
     transform: translateY(-4px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -1175,8 +1198,9 @@ body::before {
 }
 
 .split-tab {
-  flex: 1;
-  padding: 0.45rem 0.6rem;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.45rem 0.35rem;
   font-size: 0.78rem;
   font-weight: 600;
   text-align: center;
@@ -1186,12 +1210,47 @@ body::before {
   transition: var(--transition-fast);
   border: none;
   background: transparent;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .split-tab.active {
   background: var(--bg-surface-elevated);
   color: #ffffff;
   border: 1px solid var(--border-glass-hover);
+}
+
+/* Split options dynamic container layout */
+#split-options-container {
+  min-width: 0;
+}
+
+#split-options-container .split-exact-input,
+#split-options-container .split-percent-input,
+#split-options-container .split-shares-input {
+  flex-shrink: 0;
+  max-width: 45%;
+}
+
+#split-options-container > div > div > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#split-options-container label {
+  min-width: 0;
+}
+
+#split-options-container label span:nth-of-type(1) {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* UPI & Settlement Modal Visuals */
@@ -1257,8 +1316,20 @@ body::before {
 .receipt-row {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
   font-size: 0.85rem;
   margin-bottom: 0.6rem;
+}
+
+.receipt-row > span:first-child {
+  flex-shrink: 0;
+}
+
+.receipt-row > *:last-child {
+  min-width: 0;
+  word-break: break-all;
+  text-align: right;
 }
 
 .receipt-total {
@@ -1290,6 +1361,7 @@ body::before {
   position: fixed;
   bottom: 1.5rem;
   right: 1.5rem;
+  max-width: calc(100vw - 3rem);
   z-index: 9999;
   display: flex;
   flex-direction: column;
@@ -1310,6 +1382,9 @@ body::before {
   display: flex;
   align-items: center;
   gap: 0.65rem;
+  max-width: 100%;
+  word-break: break-word;
+  box-sizing: border-box;
   animation: toastIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -1324,6 +1399,7 @@ body::before {
     opacity: 0;
     transform: translateY(12px) scale(0.95);
   }
+
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
@@ -1481,19 +1557,31 @@ body::before {
 
 /* Responsive adjustments */
 @media (max-width: 768px) {
+  /* Step 2 — Simplify mobile compositing & disable expensive hardware layers on mobile */
+
+  /* 1. Simplify fixed background layer on mobile to eliminate multi-pass radial repaint costs */
+  body::before {
+    background: linear-gradient(180deg, #07090e 0%, #0f141f 100%);
+    transform: none;
+    will-change: auto;
+  }
+
   .app-container {
     padding: 0.85rem 0.75rem 3.5rem;
   }
 
+  /* 2. Sticky app header: disable backdrop-filter blur and transform layer promotion on mobile */
   .app-header {
     top: 0.5rem;
     margin-bottom: 1.25rem;
     padding: 0.75rem 1rem;
     flex-direction: column;
     align-items: stretch;
-    background: rgba(15, 20, 31, 0.94);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    background: rgba(15, 20, 31, 0.96);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    transform: none;
+    will-change: auto;
   }
 
   .header-actions {
@@ -1509,6 +1597,16 @@ body::before {
     padding: 1.25rem 1rem;
   }
 
+  /* 3. Remove unnecessary 3D layer promotion (translateZ(0) & backface-visibility) from cards/chips/buttons on mobile */
+  .glass-card,
+  .glass-card-elevated,
+  .debt-card,
+  .member-chip,
+  .btn {
+    transform: none;
+    backface-visibility: visible;
+  }
+
   /* Mobile glassmorphism fallback: high-opacity surface avoids multi-layer blur fill-rate thrashing during touch scroll */
   .glass-card {
     background: rgba(18, 24, 38, 0.94);
@@ -1519,6 +1617,88 @@ body::before {
 
   .glass-card-elevated {
     background: rgba(22, 30, 46, 0.96);
+  }
+
+  /* 4. Disable backdrop-filter blur on fixed modal backdrop on mobile (Phase 1 preserved) */
+  .modal-overlay {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(4, 7, 13, 0.92);
+    padding: 0.75rem;
+    padding-top: max(0.75rem, env(safe-area-inset-top));
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    padding-left: max(0.75rem, env(safe-area-inset-left));
+    padding-right: max(0.75rem, env(safe-area-inset-right));
+  }
+
+  /* 5. Mobile Modal Architecture: dynamic viewport height & safe internal scrolling (Phase 1 transform: none preserved) */
+  .modal-dialog {
+    width: 100%;
+    max-width: 100% !important;
+    max-height: 90vh;
+    max-height: calc(100dvh - 1.5rem);
+    border-radius: var(--radius-md);
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .modal-overlay.active .modal-dialog {
+    transform: none;
+  }
+
+  .modal-header {
+    padding: 0.9rem 1.15rem;
+  }
+
+  .modal-header h3 {
+    font-size: 1.05rem;
+  }
+
+  .modal-body {
+    padding: 1.15rem;
+    gap: 1rem;
+  }
+
+  .modal-footer {
+    padding: 0.9rem 1.15rem;
+    gap: 0.5rem;
+  }
+
+  /* De-nest Room Hub internal scroll lists to prevent dual scroll traps on mobile */
+  #saved-rooms-list,
+  #group-search-results,
+  #join-requests-list,
+  #archived-rooms-list {
+    max-height: none !important;
+    overflow-y: visible !important;
+  }
+
+  .receipt-paper {
+    padding: 1.25rem 1rem;
+  }
+
+  .qr-preview-box {
+    padding: 1rem;
+    max-width: 220px;
+  }
+
+  .qr-preview-box canvas {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  /* 6. Lightweight fallbacks for floating elements on mobile */
+  .user-dropdown-menu,
+  .toast-success {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .user-dropdown-menu {
+    background: rgba(15, 23, 42, 0.98);
+  }
+
+  .toast-success {
+    background: rgba(16, 185, 129, 0.92);
   }
 
   .category-grid-picker {
@@ -1535,7 +1715,246 @@ body::before {
   }
 }
 
+@media (max-width: 600px) {
+  .modal-footer {
+    flex-wrap: wrap;
+  }
+}
+
 @media (max-width: 480px) {
+  /* Form grids inside modals: collapse 2-column layouts to single-column on narrow phone viewports */
+  .modal-dialog div[style*="grid-template-columns: 1fr 1fr"],
+  .modal-dialog form div[style*="grid-template-columns: 1fr 1fr"] {
+    grid-template-columns: 1fr !important;
+    gap: 0.75rem !important;
+  }
+
+  .modal-overlay {
+    padding: 0.5rem;
+    padding-top: max(0.5rem, env(safe-area-inset-top));
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+    padding-left: max(0.5rem, env(safe-area-inset-left));
+    padding-right: max(0.5rem, env(safe-area-inset-right));
+  }
+
+  .modal-dialog {
+    max-height: calc(100dvh - 1rem);
+    border-radius: var(--radius-sm);
+  }
+
+  .modal-header {
+    padding: 0.75rem 0.9rem;
+  }
+
+  .modal-header h3 {
+    font-size: 0.95rem;
+  }
+
+  .modal-close-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 1.1rem;
+  }
+
+  .modal-body {
+    padding: 0.85rem;
+    gap: 0.85rem;
+  }
+
+  .modal-footer {
+    padding: 0.75rem 0.9rem;
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 0.45rem;
+  }
+
+  .modal-footer .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .modal-footer > div {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  .modal-footer > div > .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Specific modal multi-action footer layouts */
+  #review-settlement-modal .modal-footer,
+  #edit-member-modal .modal-footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 0.45rem;
+  }
+
+  #user-profile-modal form > div[style*="justify-content: space-between"] {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 0.45rem;
+  }
+
+  #user-profile-modal form > div[style*="justify-content: space-between"] > div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    width: 100%;
+  }
+
+  #user-profile-modal form > div[style*="justify-content: space-between"] .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Settle Payment Method Selector on narrow screens */
+  .method-selector-card {
+    padding: 0.45rem 0.2rem !important;
+    min-width: 0 !important;
+    word-break: break-word;
+  }
+
+  .method-selector-card span:first-of-type {
+    font-size: 1.05rem !important;
+  }
+
+  .method-selector-card span:last-of-type {
+    font-size: 0.7rem !important;
+    line-height: 1.2;
+    text-align: center;
+  }
+
+  .split-tabs {
+    padding: 0.2rem;
+    gap: 0.2rem;
+  }
+
+  .split-tab {
+    padding: 0.4rem 0.15rem;
+    font-size: 0.72rem;
+  }
+
+  .category-grid-picker {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.4rem;
+  }
+
+  .hub-tabs {
+    padding: 0.25rem;
+    gap: 0.25rem;
+  }
+
+  .hub-tab-btn {
+    padding: 0.35rem 0.55rem;
+    font-size: 0.72rem;
+    flex-shrink: 0;
+  }
+
+  /* Room Hub List Cards */
+  #saved-rooms-list > div {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  #saved-rooms-list > div > div:first-child {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  #saved-rooms-list > div > div:last-child {
+    flex-shrink: 0;
+    display: flex;
+    gap: 0.35rem;
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  #saved-rooms-list > div > div:last-child .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .join-request-card,
+  .group-search-card {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .join-request-card > div:first-child,
+  .group-search-card > div:first-child {
+    min-width: 0;
+    flex: 1 1 180px;
+    word-break: break-word;
+  }
+
+  /* User profile header card */
+  #user-profile-modal .modal-body > form > div:first-of-type > div:last-child {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  #profile-display-name,
+  #profile-display-email {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .receipt-stamp {
+    font-size: 0.7rem;
+    padding: 0.2rem 0.45rem;
+    bottom: 10px;
+    right: 10px;
+  }
+
+  .receipt-row {
+    font-size: 0.78rem;
+  }
+
+  .receipt-header h4 {
+    font-size: 1.1rem;
+  }
+
+  .search-box {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .expense-main {
+    min-width: 0;
+  }
+
+  .expense-details {
+    min-width: 0;
+  }
+
+  .expense-details h4 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #analytics-insights {
+    grid-template-columns: 1fr !important;
+  }
+
+  .toast-container {
+    bottom: max(0.75rem, env(safe-area-inset-bottom));
+    right: 0.75rem;
+    left: 0.75rem;
+    max-width: none;
+    align-items: center;
+  }
+
+  .toast {
+    width: 100%;
+    justify-content: center;
+  }
+
   .stats-banner {
     grid-template-columns: 1fr;
   }
@@ -1548,6 +1967,47 @@ body::before {
     width: 42px;
     height: 42px;
     font-size: 1rem;
+  }
+}
+
+/* Landscape mobile optimization: compact headers/padding and auto-scaling media */
+@media (max-height: 520px) and (orientation: landscape) {
+  .modal-overlay {
+    padding: 0.4rem;
+    padding-top: max(0.4rem, env(safe-area-inset-top));
+    padding-bottom: max(0.4rem, env(safe-area-inset-bottom));
+  }
+
+  .modal-dialog {
+    max-height: 96vh;
+    max-height: calc(100dvh - 0.8rem);
+  }
+
+  .modal-header {
+    padding: 0.5rem 0.85rem;
+  }
+
+  .modal-body {
+    padding: 0.75rem 0.85rem;
+    gap: 0.75rem;
+  }
+
+  .modal-footer {
+    padding: 0.5rem 0.85rem;
+  }
+
+  .qr-preview-box {
+    padding: 0.65rem;
+    max-width: 150px;
+  }
+
+  .qr-preview-box canvas {
+    max-height: 110px;
+    width: auto !important;
+  }
+
+  .review-proof-box img {
+    max-height: 120px !important;
   }
 }
 
@@ -1786,6 +2246,8 @@ body::before {
   top: calc(100% + 6px);
   right: 0;
   min-width: 190px;
+  max-width: calc(100vw - 1.5rem);
+  box-sizing: border-box;
   background: rgba(15, 23, 42, 0.95);
   backdrop-filter: blur(16px);
   border: 1px solid var(--border-glass);
@@ -1844,4 +2306,30 @@ body::before {
   color: #6ee7b7;
 }
 
+/* Invitation Card & Badge Counter Styles */
+.badge-counter {
+  background: var(--accent-rose);
+  color: #ffffff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  line-height: 1;
+  margin-left: 0.25rem;
+  box-shadow: 0 0 8px var(--accent-rose-glow);
+}
 
+.invitation-card {
+  transition: var(--transition-fast);
+}
+
+.invitation-card:hover {
+  border-color: var(--border-glass-hover);
+  box-shadow: var(--shadow-sm);
+}
+
+@media (max-width: 480px) {
+  .invitation-card {
+    padding: 0.75rem !important;
+  }
+}

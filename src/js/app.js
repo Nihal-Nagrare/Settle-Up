@@ -57,6 +57,12 @@ import {
   apiFetchRoomBalances,
   apiFetchRoomSimplification,
   apiSyncUserProfile,
+  apiCreateInvitation,
+  apiGetUserInvitations,
+  apiGetInvitation,
+  apiAcceptInvitation,
+  apiDeclineInvitation,
+  apiCancelInvitation,
   formatCurrency,
   CURRENCIES,
   CATEGORIES,
@@ -2287,20 +2293,359 @@ export function switchHubTab(tabName) {
   });
 
   const activeView = document.getElementById('hub-tab-view-active');
+  const invitationsView = document.getElementById('hub-tab-view-invitations');
   const searchView = document.getElementById('hub-tab-view-search');
   const requestsView = document.getElementById('hub-tab-view-requests');
   const archivedView = document.getElementById('hub-tab-view-archived');
   const createView = document.getElementById('hub-tab-view-create');
 
   if (activeView) activeView.style.display = tabName === 'active' ? 'block' : 'none';
+  if (invitationsView) invitationsView.style.display = tabName === 'invitations' ? 'block' : 'none';
   if (searchView) searchView.style.display = tabName === 'search' ? 'block' : 'none';
   if (requestsView) requestsView.style.display = tabName === 'requests' ? 'block' : 'none';
   if (archivedView) archivedView.style.display = tabName === 'archived' ? 'block' : 'none';
   if (createView) createView.style.display = tabName === 'create' ? 'block' : 'none';
 
   if (tabName === 'active') renderSavedRoomsList();
+  if (tabName === 'invitations') refreshUserInvitationsList();
   if (tabName === 'archived') renderArchivedRoomsList();
   if (tabName === 'requests') refreshJoinRequestsList();
+}
+
+/* =========================================================================
+   Room Invitation System UI & Event Handlers (Stage B)
+   ========================================================================= */
+
+export function switchAddMemberTab(tabMode) {
+  const inviteTabBtn = document.getElementById('add-member-tab-invite');
+  const directTabBtn = document.getElementById('add-member-tab-direct');
+  const inviteView = document.getElementById('add-member-mode-invite');
+  const directView = document.getElementById('add-member-mode-direct');
+  const modalTitle = document.getElementById('add-member-modal-title');
+
+  if (inviteTabBtn) inviteTabBtn.classList.toggle('active', tabMode === 'invite');
+  if (directTabBtn) directTabBtn.classList.toggle('active', tabMode === 'direct');
+
+  if (inviteView) inviteView.style.display = tabMode === 'invite' ? 'block' : 'none';
+  if (directView) directView.style.display = tabMode === 'direct' ? 'block' : 'none';
+
+  if (modalTitle) {
+    modalTitle.innerText = tabMode === 'invite' ? '✉️ Invite Member' : '➕ Add Trip Member';
+  }
+}
+
+export async function sendInvitationAction() {
+  const alertBox = document.getElementById('invite-alert-container');
+  const identifierInput = document.getElementById('invite-user-identifier');
+  const messageInput = document.getElementById('invite-message-input');
+  const submitBtn = document.getElementById('send-invite-submit-btn');
+
+  if (alertBox) {
+    alertBox.style.display = 'none';
+    alertBox.className = '';
+  }
+
+  const rawTarget = identifierInput?.value?.trim() || '';
+  if (!rawTarget) {
+    if (alertBox) {
+      alertBox.className = 'auth-alert-error';
+      alertBox.innerText = 'Please enter a user email, phone, or User ID.';
+      alertBox.style.display = 'block';
+    }
+    return;
+  }
+
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span>Sending...</span>';
+  }
+
+  try {
+    const res = await apiCreateInvitation(currentRoom.id, rawTarget, {
+      message: messageInput?.value?.trim()
+    });
+
+    if (res.success) {
+      if (alertBox) {
+        alertBox.className = 'auth-alert-success';
+        alertBox.innerText = '«Invitation sent successfully.»';
+        alertBox.style.display = 'block';
+      }
+      showToast('«Invitation sent successfully.»');
+      if (identifierInput) identifierInput.value = '';
+      if (messageInput) messageInput.value = '';
+
+      refreshUserInvitationsList();
+      checkUserInvitationsBadgeCount();
+
+      setTimeout(() => {
+        closeModal('add-member-modal');
+      }, 1200);
+    } else {
+      let friendlyError = res.error || 'Failed to send invitation.';
+      if (res.status === 409) {
+        if (friendlyError.includes('already a member')) {
+          friendlyError = '«This user is already a member of this room.»';
+        } else if (friendlyError.includes('pending invitation')) {
+          friendlyError = '«An invitation is already pending for this user.»';
+        }
+      } else if (res.status === 404) {
+        friendlyError = '«User not found.»';
+      } else if (res.status === 403) {
+        friendlyError = 'Only authorized room hosts or admins can invite members.';
+      } else if (res.status === 400) {
+        if (friendlyError.includes('closed') || friendlyError.includes('archived')) {
+          friendlyError = 'Cannot send invitations for closed or archived rooms.';
+        } else if (friendlyError.includes('yourself')) {
+          friendlyError = 'You cannot invite yourself to a room.';
+        }
+      } else if (res.status === 0 || res.offline) {
+        friendlyError = '«Unable to connect. Please try again.»';
+      }
+
+      if (alertBox) {
+        alertBox.className = 'auth-alert-error';
+        alertBox.innerText = friendlyError;
+        alertBox.style.display = 'block';
+      }
+    }
+  } catch (err) {
+    if (alertBox) {
+      alertBox.className = 'auth-alert-error';
+      alertBox.innerText = '«Unable to connect. Please try again.»';
+      alertBox.style.display = 'block';
+    }
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = '<span>✉️ Send Invite</span>';
+    }
+  }
+}
+
+export async function checkUserInvitationsBadgeCount() {
+  if (!getAuthToken()) {
+    const headerBadge = document.getElementById('hub-pending-badge');
+    const hubTabBadge = document.getElementById('hub-invitations-badge');
+    if (headerBadge) headerBadge.style.display = 'none';
+    if (hubTabBadge) hubTabBadge.style.display = 'none';
+    return;
+  }
+
+  const res = await apiGetUserInvitations();
+  if (res.success) {
+    const pendingCount = res.pendingCount || 0;
+    const headerBadge = document.getElementById('hub-pending-badge');
+    const hubTabBadge = document.getElementById('hub-invitations-badge');
+
+    if (headerBadge) {
+      headerBadge.innerText = pendingCount;
+      headerBadge.style.display = pendingCount > 0 ? 'inline-block' : 'none';
+    }
+    if (hubTabBadge) {
+      hubTabBadge.innerText = pendingCount;
+      hubTabBadge.style.display = pendingCount > 0 ? 'inline-block' : 'none';
+    }
+  }
+}
+
+export async function refreshUserInvitationsList() {
+  const userListEl = document.getElementById('user-invitations-list');
+  const roomPendingSection = document.getElementById('room-pending-invitations-section');
+  const roomPendingListEl = document.getElementById('room-pending-invitations-list');
+
+  if (!userListEl) return;
+
+  if (!getAuthToken()) {
+    userListEl.innerHTML = `
+      <div style="text-align: center; color: var(--text-muted); padding: 1.5rem 0; font-size: 0.85rem;">
+        Please <a href="javascript:void(0)" onclick="window.app.openAuthModal('login')" style="color: var(--primary-light); text-decoration: underline;">Log In</a> to view your room invitations.
+      </div>
+    `;
+    if (roomPendingSection) roomPendingSection.style.display = 'none';
+    return;
+  }
+
+  userListEl.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 1rem 0; font-size: 0.85rem;">Loading invitations...</div>`;
+
+  const res = await apiGetUserInvitations();
+  checkUserInvitationsBadgeCount();
+
+  if (!res.success || !res.invitations || res.invitations.length === 0) {
+    userListEl.innerHTML = `
+      <div class="glass-card-elevated" style="text-align: center; padding: 1.5rem; color: var(--text-muted); font-size: 0.85rem;">
+        <div style="font-size: 1.8rem; margin-bottom: 0.35rem;">📬</div>
+        <strong>No pending invitations</strong>
+        <p style="font-size: 0.78rem; margin-top: 0.25rem;">You're all caught up.</p>
+      </div>
+    `;
+  } else {
+    userListEl.innerHTML = res.invitations.map(inv => {
+      const isPending = inv.status === 'PENDING';
+      const isAccepted = inv.status === 'ACCEPTED';
+      const isDeclined = inv.status === 'DECLINED';
+      const isCancelled = inv.status === 'CANCELLED';
+      const isExpired = inv.status === 'EXPIRED';
+
+      const roomName = inv.room?.name || `Room #${inv.roomId || inv.room_id}`;
+      const inviterName = inv.inviter?.name || 'A room host';
+
+      let statusBadgeClass = 'status-pill-active';
+      if (isPending) statusBadgeClass = 'status-badge-awaiting';
+      else if (isAccepted) statusBadgeClass = 'status-badge-confirmed';
+      else if (isDeclined || isCancelled || isExpired) statusBadgeClass = 'status-badge-rejected';
+
+      return `
+        <div class="glass-card-elevated invitation-card" style="padding: 0.85rem 1rem; margin-bottom: 0.65rem; border-radius: var(--radius-sm);">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.4rem;">
+            <div>
+              <div style="display: flex; align-items: center; gap: 0.4rem;">
+                <span style="font-size: 1.05rem;">🏠</span>
+                <strong style="font-size: 0.95rem; color: var(--text-main);">${escapeHtml(roomName)}</strong>
+              </div>
+              <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.2rem;">
+                Invited by <strong>${escapeHtml(inviterName)}</strong>
+                ${inv.created_at || inv.createdAt ? ` • <span style="font-size: 0.72rem;">${new Date(inv.created_at || inv.createdAt).toLocaleDateString()}</span>` : ''}
+              </div>
+            </div>
+            <span class="status-badge ${statusBadgeClass}" style="font-size: 0.68rem; text-transform: uppercase;">
+              ${inv.status}
+            </span>
+          </div>
+
+          ${inv.message ? `
+            <div style="font-size: 0.8rem; color: var(--text-main); background: rgba(255, 255, 255, 0.04); padding: 0.45rem 0.65rem; border-radius: 4px; margin: 0.4rem 0; border-left: 2px solid var(--primary);">
+              "${escapeHtml(inv.message)}"
+            </div>
+          ` : ''}
+
+          ${isPending ? `
+            <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.65rem;">
+              <button id="decline-btn-${inv.id}" class="btn btn-secondary btn-sm" style="color: #f87171; border-color: rgba(248, 113, 113, 0.3);" onclick="window.app.declineInvitationAction('${inv.id}')">
+                Decline
+              </button>
+              <button id="accept-btn-${inv.id}" class="btn btn-emerald btn-sm" onclick="window.app.acceptInvitationAction('${inv.id}', '${escapeHtml(roomName)}')">
+                Accept
+              </button>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }).join('');
+  }
+
+  // Pending invitations sent for current room (if user is host)
+  if (roomPendingSection && roomPendingListEl && currentRoom && currentRoom.id) {
+    const authUser = getAuthenticatedUser();
+    const isOwner = currentRoom.ownerId && authUser && String(currentRoom.ownerId) === String(authUser.id);
+
+    if (isOwner) {
+      roomPendingSection.style.display = 'block';
+      const roomInvsRes = await apiRequest(`/rooms/${encodeURIComponent(currentRoom.id)}/invitations`);
+      const pendingRoomInvs = (roomInvsRes.ok && roomInvsRes.data && roomInvsRes.data.invitations) ? roomInvsRes.data.invitations.filter(i => i.status === 'PENDING') : [];
+
+      if (pendingRoomInvs.length === 0) {
+        roomPendingListEl.innerHTML = `<div style="font-size: 0.78rem; color: var(--text-muted); padding: 0.5rem 0;">No active pending invitations for this room.</div>`;
+      } else {
+        roomPendingListEl.innerHTML = pendingRoomInvs.map(inv => `
+          <div class="glass-card-elevated" style="display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0.75rem; margin-bottom: 0.4rem; font-size: 0.82rem;">
+            <div>
+              <strong>👤 ${escapeHtml(inv.invitee?.name || inv.invitee_id || 'User')}</strong>
+              <div style="font-size: 0.72rem; color: var(--text-muted);">Invitation pending</div>
+            </div>
+            <button id="cancel-inv-btn-${inv.id}" class="btn btn-secondary btn-sm" style="color: #f87171; font-size: 0.75rem;" onclick="window.app.cancelInvitationAction('${inv.id}')">
+              Cancel
+            </button>
+          </div>
+        `).join('');
+      }
+    } else {
+      roomPendingSection.style.display = 'none';
+    }
+  }
+}
+
+export async function acceptInvitationAction(invitationId, roomName) {
+  const acceptBtn = document.getElementById(`accept-btn-${invitationId}`);
+  const declineBtn = document.getElementById(`decline-btn-${invitationId}`);
+
+  if (acceptBtn) {
+    acceptBtn.disabled = true;
+    acceptBtn.innerText = 'Accepting...';
+  }
+  if (declineBtn) declineBtn.disabled = true;
+
+  const res = await apiAcceptInvitation(invitationId);
+  if (res.success) {
+    showToast(`«You joined ${roomName || 'the room'}.»`);
+    triggerConfetti({ particleCount: 70 });
+    await refreshUserInvitationsList();
+    checkUserInvitationsBadgeCount();
+
+    const targetRoomId = res.invitation?.roomId || res.invitation?.room_id || res.invitation?.room?.id;
+    if (targetRoomId) {
+      await switchRoom(targetRoomId);
+      closeModal('create-room-modal');
+    }
+  } else {
+    let msg = res.error || 'Failed to accept invitation.';
+    if (res.status === 400 && msg.includes('expired')) {
+      msg = '«This invitation has expired.»';
+    } else if (res.status === 400 || res.status === 404) {
+      msg = '«This invitation is no longer available.»';
+    } else if (res.status === 0 || res.offline) {
+      msg = '«Unable to connect. Please try again.»';
+    }
+    showToast(msg, 'info');
+    await refreshUserInvitationsList();
+  }
+}
+
+export async function declineInvitationAction(invitationId) {
+  const acceptBtn = document.getElementById(`accept-btn-${invitationId}`);
+  const declineBtn = document.getElementById(`decline-btn-${invitationId}`);
+
+  if (declineBtn) {
+    declineBtn.disabled = true;
+    declineBtn.innerText = 'Declining...';
+  }
+  if (acceptBtn) acceptBtn.disabled = true;
+
+  const res = await apiDeclineInvitation(invitationId);
+  if (res.success) {
+    showToast('«Invitation declined.»', 'info');
+    await refreshUserInvitationsList();
+    checkUserInvitationsBadgeCount();
+  } else {
+    let msg = res.error || 'Failed to decline invitation.';
+    if (res.status === 0 || res.offline) {
+      msg = '«Unable to connect. Please try again.»';
+    }
+    showToast(msg, 'info');
+    await refreshUserInvitationsList();
+  }
+}
+
+export async function cancelInvitationAction(invitationId) {
+  const cancelBtn = document.getElementById(`cancel-inv-btn-${invitationId}`);
+
+  if (cancelBtn) {
+    cancelBtn.disabled = true;
+    cancelBtn.innerText = 'Cancelling...';
+  }
+
+  const res = await apiCancelInvitation(invitationId);
+  if (res.success) {
+    showToast('Invitation cancelled', 'info');
+    await refreshUserInvitationsList();
+  } else {
+    let msg = res.error || 'Failed to cancel invitation.';
+    if (res.status === 0 || res.offline) {
+      msg = '«Unable to connect. Please try again.»';
+    }
+    showToast(msg, 'info');
+    await refreshUserInvitationsList();
+  }
 }
 
 export async function renderSavedRoomsList() {
@@ -3086,7 +3431,15 @@ window.app = {
   handleProfileUpdateSubmit,
   renderAvatarColorPickers,
   selectSignupAvatarColor,
-  selectProfileAvatarColor
+  selectProfileAvatarColor,
+  // Invitation methods
+  switchAddMemberTab,
+  sendInvitationAction,
+  checkUserInvitationsBadgeCount,
+  refreshUserInvitationsList,
+  acceptInvitationAction,
+  declineInvitationAction,
+  cancelInvitationAction
 };
 
 // Initialize on DOM load or immediately if already ready

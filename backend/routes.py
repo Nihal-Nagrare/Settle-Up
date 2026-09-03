@@ -688,3 +688,119 @@ def update_user_profile(user_id):
         return jsonify({'error': msg}), 400
     return jsonify({'user': user, 'message': msg}), 200
 
+
+# =========================================================================
+# Room Invitation Routes
+# =========================================================================
+
+@api_bp.route('/rooms/<room_id>/invitations', methods=['POST'])
+@token_required
+def create_room_invitation(room_id):
+    """
+    POST /api/rooms/<room_id>/invitations
+    Create a new room invitation (Host / Admin only).
+    Body: { "invitee_id": "usr_...", "message": "...", "expires_at": "..." }
+    """
+    data = request.get_json() or {}
+    invitee_id = data.get('invitee_id') or data.get('inviteeId') or data.get('email')
+    if not invitee_id:
+        return jsonify({'error': 'Target user identifier (invitee_id) is required'}), 400
+
+    invitation, success, msg, status_code = db_service.create_invitation(
+        room_id=room_id,
+        inviter_user_id=request.current_user.id,
+        invitee_id_or_identifier=invitee_id,
+        message=data.get('message'),
+        expires_at=data.get('expires_at') or data.get('expiresAt')
+    )
+
+    if not success:
+        return jsonify({'error': msg, 'status': status_code}), status_code
+
+    return jsonify({'invitation': invitation, 'message': msg}), status_code
+
+
+@api_bp.route('/invitations', methods=['GET'])
+@token_required
+def list_user_invitations():
+    """
+    GET /api/invitations
+    Retrieve all invitations for the authenticated user, prioritizing PENDING.
+    """
+    result = db_service.get_user_invitations(request.current_user.id)
+    return jsonify(result), 200
+
+
+@api_bp.route('/invitations/<invitation_id>', methods=['GET'])
+@token_required
+def get_invitation(invitation_id):
+    """
+    GET /api/invitations/<invitation_id>
+    Retrieve a single invitation if authorized (invitee, inviter, or room host/admin).
+    """
+    invitation, status_code, err_msg = db_service.get_invitation_by_id(
+        invitation_id=invitation_id,
+        viewer_user_id=request.current_user.id
+    )
+
+    if not invitation:
+        return jsonify({'error': err_msg or 'Invitation not found', 'status': status_code}), status_code
+
+    return jsonify({'invitation': invitation}), 200
+
+
+@api_bp.route('/invitations/<invitation_id>/accept', methods=['POST'])
+@token_required
+def accept_room_invitation(invitation_id):
+    """
+    POST /api/invitations/<invitation_id>/accept
+    Accept invitation and create room membership atomically (Invitee only).
+    """
+    invitation, success, msg, status_code = db_service.accept_invitation(
+        invitation_id=invitation_id,
+        user_id=request.current_user.id
+    )
+
+    if not success:
+        return jsonify({'error': msg, 'status': status_code}), status_code
+
+    return jsonify({'invitation': invitation, 'message': msg}), status_code
+
+
+@api_bp.route('/invitations/<invitation_id>/decline', methods=['POST'])
+@token_required
+def decline_room_invitation(invitation_id):
+    """
+    POST /api/invitations/<invitation_id>/decline
+    Decline invitation (Invitee only).
+    """
+    invitation, success, msg, status_code = db_service.decline_invitation(
+        invitation_id=invitation_id,
+        user_id=request.current_user.id
+    )
+
+    if not success:
+        return jsonify({'error': msg, 'status': status_code}), status_code
+
+    return jsonify({'invitation': invitation, 'message': msg}), status_code
+
+
+@api_bp.route('/invitations/<invitation_id>', methods=['DELETE'])
+@api_bp.route('/invitations/<invitation_id>/cancel', methods=['POST'])
+@token_required
+def cancel_room_invitation(invitation_id):
+    """
+    DELETE /api/invitations/<invitation_id> or POST /api/invitations/<invitation_id>/cancel
+    Cancel pending invitation (Inviter or Room Host/Admin only).
+    """
+    invitation, success, msg, status_code = db_service.cancel_invitation(
+        invitation_id=invitation_id,
+        user_id=request.current_user.id
+    )
+
+    if not success:
+        return jsonify({'error': msg, 'status': status_code}), status_code
+
+    return jsonify({'invitation': invitation, 'message': msg}), status_code
+
+
