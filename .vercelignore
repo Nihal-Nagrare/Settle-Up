@@ -1,0 +1,11 @@
+.git
+.gitignore
+.pytest_cache
+__pycache__
+*.pyc
+settleup.db
+uploads/
+test_*.py
+README.md
+SettleUp_Vercel_Analysis_Report.md
+Procfile

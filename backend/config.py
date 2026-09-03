@@ -65,6 +65,9 @@ class ProductionConfig(Config):
     TESTING = False
     USE_PROXY_FIX = os.getenv('USE_PROXY_FIX', 'True').lower() in ('true', '1', 't')
 
+    # Ensure class-level fallback is non-default in production if env var is absent
+    SECRET_KEY = os.getenv('SECRET_KEY') or secrets.token_hex(32)
+
     def __init__(self):
         super().__init__()
         # In production, if SECRET_KEY is missing or using default, generate a secure random one

@@ -26,7 +26,8 @@ def create_app(config_class=None):
     # Load configuration
     if config_class is None:
         config_class = get_config()
-    app.config.from_object(config_class)
+    config_obj = config_class() if isinstance(config_class, type) else config_class
+    app.config.from_object(config_obj)
 
     # Initialize SQLAlchemy database
     db.init_app(app)

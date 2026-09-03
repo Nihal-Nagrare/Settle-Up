@@ -28,7 +28,10 @@ MAGIC_SIGNATURES = {
 
 
 def get_upload_dir(app=None):
-    """Retrieves and ensures creation of the secure upload directory."""
+    """
+    Retrieves and ensures creation of the secure upload directory.
+    Automatically falls back to /tmp/uploads/proofs if the target filesystem is read-only (e.g. Vercel serverless).
+    """
     if app:
         upload_dir = app.config.get('UPLOAD_FOLDER', str(BASE_DIR / 'uploads' / 'proofs'))
     elif current_app:
@@ -37,8 +40,21 @@ def get_upload_dir(app=None):
         upload_dir = str(BASE_DIR / 'uploads' / 'proofs')
 
     upload_path = Path(upload_dir).resolve()
-    upload_path.mkdir(parents=True, exist_ok=True)
-    return str(upload_path)
+    try:
+        upload_path.mkdir(parents=True, exist_ok=True)
+        # Test directory writability
+        test_file = upload_path / '.write_test'
+        test_file.touch(exist_ok=True)
+        test_file.unlink(missing_ok=True)
+        return str(upload_path)
+    except (PermissionError, OSError):
+        # Fallback for serverless read-only filesystems (Vercel / AWS Lambda)
+        tmp_upload_dir = Path('/tmp/uploads/proofs').resolve()
+        try:
+            tmp_upload_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return str(tmp_upload_dir)
 
 
 def detect_image_type_from_magic_bytes(header_bytes):

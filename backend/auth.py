@@ -124,8 +124,8 @@ def rate_limit(max_requests=15, window_seconds=60):
             if current_app and current_app.config.get('TESTING'):
                 return f(*args, **kwargs)
 
-            # Resolve client IP address (supporting X-Forwarded-For if behind reverse proxy)
-            client_ip = request.headers.get('X-Forwarded-For', request.remote_addr or '127.0.0.1')
+            # Resolve client IP address (supporting X-Forwarded-For if behind reverse proxy/Vercel)
+            client_ip = request.headers.get('X-Forwarded-For', getattr(request, 'remote_addr', None) or '127.0.0.1') or '127.0.0.1'
             if ',' in client_ip:
                 client_ip = client_ip.split(',')[0].strip()
 
