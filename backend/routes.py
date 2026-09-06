@@ -3,7 +3,7 @@ Settle Up - RESTful API Blueprint Routes (Database-backed)
 Handles rooms, members, expenses, settlements, join requests, and greedy debt simplification.
 """
 
-from flask import Blueprint, request, jsonify, send_file, make_response
+from flask import Blueprint, request, jsonify, send_file, make_response, redirect
 from . import db_service
 from . import algorithm
 from . import proof_storage
@@ -16,11 +16,22 @@ api_bp = Blueprint('api', __name__, url_prefix='/api')
 @api_bp.route('/health', methods=['GET'])
 def health():
     """Health check endpoint."""
+    try:
+        engine_name = db.engine.name.lower()
+        if engine_name == 'sqlite':
+            db_type = 'SQLite (SQLAlchemy)'
+        elif engine_name == 'postgresql':
+            db_type = 'PostgreSQL (SQLAlchemy)'
+        else:
+            db_type = f"{db.engine.name.upper()} (SQLAlchemy)"
+    except Exception:
+        db_type = "Database (SQLAlchemy)"
+
     return jsonify({
         'status': 'ok',
         'app': 'Settle Up',
         'version': '1.0.0',
-        'database': 'SQLite (SQLAlchemy)'
+        'database': db_type
     }), 200
 
 
@@ -418,7 +429,12 @@ def get_settlement_proof_file(room_id, settlement_id):
     if not is_authorized:
         return jsonify({'error': 'Forbidden: You are not authorized to view this payment proof', 'status': 403}), 403
 
-    # Safe path resolution (anti-directory traversal)
+    # Check if proof is hosted on remote cloud object storage
+    cloud_url = proof_storage.get_proof_url(proof_file_ref)
+    if cloud_url:
+        return redirect(cloud_url, code=302)
+
+    # Safe path resolution (anti-directory traversal) for local files
     file_path, exists = proof_storage.resolve_proof_file_path(proof_file_ref)
     if not exists or not file_path:
         return jsonify({'error': 'Proof file does not exist on disk', 'status': 404}), 404

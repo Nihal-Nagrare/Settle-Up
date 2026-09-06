@@ -6,6 +6,7 @@ Application factory, SQLAlchemy database initialization, scoped CORS, blueprint 
 import os
 from pathlib import Path
 from flask import Flask, send_from_directory, jsonify, request
+from werkzeug.exceptions import HTTPException
 from .config import get_config, Config
 from .models import db
 from .db_service import init_database
@@ -26,12 +27,22 @@ def create_app(config_class=None):
     # Load configuration
     if config_class is None:
         config_class = get_config()
+    elif isinstance(config_class, str):
+        from .config import config_by_name, DevelopmentConfig
+        config_class = config_by_name.get(config_class.lower(), DevelopmentConfig)
     config_obj = config_class() if isinstance(config_class, type) else config_class
     app.config.from_object(config_obj)
 
     # Initialize SQLAlchemy database
     db.init_app(app)
     init_database(app)
+
+    # Register CLI command for explicit database initialization in production
+    @app.cli.command("init-db")
+    def init_db_command():
+        """Initialize database tables and run non-destructive migrations."""
+        init_database(app)
+        print("Database initialized successfully.")
 
     # Apply Werkzeug ProxyFix for reverse proxies (handles HTTPS X-Forwarded-Proto and client IPs)
     if app.config.get('USE_PROXY_FIX'):
@@ -64,14 +75,14 @@ def create_app(config_class=None):
         response.headers['X-XSS-Protection'] = '1; mode=block'
         response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
 
-        # Content-Security-Policy (allows Google fonts, inline styles/scripts for SPA)
+        # Content-Security-Policy (allows Google fonts, inline styles/scripts for SPA, and remote cloud proof images)
         if not response.headers.get('Content-Security-Policy'):
             csp = (
                 "default-src 'self'; "
                 "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
                 "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
                 "font-src 'self' https://fonts.gstatic.com data:; "
-                "img-src 'self' data: blob:; "
+                "img-src 'self' data: blob: https:; "
                 "connect-src 'self'; "
                 "frame-ancestors 'self';"
             )
@@ -92,6 +103,14 @@ def create_app(config_class=None):
     app.register_blueprint(api_bp)
 
     # JSON Error Handlers for API endpoints
+    @app.errorhandler(HTTPException)
+    def handle_http_exception(error):
+        if request.path.startswith('/api/'):
+            return jsonify({'error': error.description, 'status': error.code}), error.code
+        if error.code == 404:
+            return send_from_directory(str(STATIC_DIR), 'index.html')
+        return error
+
     @app.errorhandler(404)
     def not_found_handler(error):
         if request.path.startswith('/api/'):
@@ -114,6 +133,15 @@ def create_app(config_class=None):
         if request.path.startswith('/api/'):
             return jsonify({'error': 'Internal server error', 'status': 500}), 500
         return jsonify({'error': 'Internal server error'}), 500
+
+    @app.errorhandler(Exception)
+    def unhandled_exception_handler(error):
+        if isinstance(error, HTTPException):
+            return handle_http_exception(error)
+        if request.path.startswith('/api/'):
+            app.logger.error("Unhandled API exception: %s", error, exc_info=True)
+            return jsonify({'error': 'Internal server error', 'status': 500}), 500
+        raise error
 
     # Initialize secure proof storage directory
     from . import proof_storage

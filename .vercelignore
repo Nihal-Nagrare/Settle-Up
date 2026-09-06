@@ -9,3 +9,7 @@ test_*.py
 README.md
 SettleUp_Vercel_Analysis_Report.md
 Procfile
+scratch/
+deployment*.txt
+depolyment*.txt
+depolymet*

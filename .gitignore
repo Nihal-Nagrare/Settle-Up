@@ -23,11 +23,14 @@ uploads/proofs/*
 !uploads/proofs/.gitkeep
 uploads/test_proofs/
 
-# Logs and scratch output
+# Logs, scratch output, and temporary deployment notes
 *.log
 *.jsonl
 brain/
 scratch/
+deployment*.txt
+depolyment*.txt
+depolymet*
 
 # Virtual Environments
 venv/

@@ -19,7 +19,9 @@ EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$')
 
 def get_serializer():
     """Returns timed serializer initialized with Flask SECRET_KEY."""
-    secret_key = current_app.config.get('SECRET_KEY', 'settleup-default-secret-key-2026')
+    secret_key = current_app.config.get('SECRET_KEY')
+    if not secret_key:
+        raise RuntimeError("SECRET_KEY is not configured")
     return URLSafeTimedSerializer(secret_key, salt='settleup-auth-token')
 
 
