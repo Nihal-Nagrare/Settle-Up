@@ -1,15 +1,38 @@
+# Environments and secrets
+.env
+.env.*
+!.env.example
+
+# Git and testing
 .git
 .gitignore
 .pytest_cache
 __pycache__
 *.pyc
-settleup.db
-uploads/
+*.pyo
+*.pyd
 test_*.py
-README.md
-SettleUp_Vercel_Analysis_Report.md
-Procfile
+
+# Local databases and SQLite files (NEVER deploy to Vercel)
+settleup.db
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+*.sqlite3
+instance/
+
+# Local uploads and test files
+uploads/
 scratch/
+
+# Local scripts, documentation, and notes
+README.md
+VERCEL_DEPLOYMENT.md
+SettleUp_Vercel_Analysis_Report.md
+migrate_sqlite_to_postgres.py
+Procfile
 deployment*.txt
 depolyment*.txt
 depolymet*
+

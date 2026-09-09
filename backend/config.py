@@ -113,7 +113,7 @@ class ProductionConfig(Config):
         if db_url_clean.startswith("postgres://"):
             db_url_clean = db_url_clean.replace("postgres://", "postgresql://", 1)
 
-        if not (db_url_clean.startswith("postgresql://") or db_url_clean.startswith("postgresql+psycopg2://")):
+        if not (db_url_clean.startswith("postgresql://") or db_url_clean.startswith("postgresql+")):
             raise RuntimeError(
                 f"CRITICAL CONFIGURATION ERROR: Production database must be PostgreSQL. "
                 f"'DATABASE_URL' must start with 'postgresql://' or 'postgres://'. "

@@ -97,98 +97,98 @@ def init_database(app):
         with db.engine.connect() as conn:
             if 'rooms' in existing_tables:
                 room_cols = {c['name'] for c in inspector.get_columns('rooms')}
-                if is_pg or 'status' not in room_cols:
+                if 'status' not in room_cols:
                     _safe_add_column(conn, 'rooms', 'status', "VARCHAR(20) DEFAULT 'ACTIVE'")
-                if is_pg or 'owner_id' not in room_cols:
+                if 'owner_id' not in room_cols:
                     _safe_add_column(conn, 'rooms', 'owner_id', "VARCHAR(64)")
-                if is_pg or 'completed_at' not in room_cols:
+                if 'completed_at' not in room_cols:
                     _safe_add_column(conn, 'rooms', 'completed_at', dt_type)
-                if is_pg or 'archived_at' not in room_cols:
+                if 'archived_at' not in room_cols:
                     _safe_add_column(conn, 'rooms', 'archived_at', dt_type)
 
             if 'members' in existing_tables:
                 member_cols = {c['name'] for c in inspector.get_columns('members')}
-                if is_pg or 'role' not in member_cols:
+                if 'role' not in member_cols:
                     _safe_add_column(conn, 'members', 'role', "VARCHAR(20) DEFAULT 'MEMBER'")
-                if is_pg or 'user_id' not in member_cols:
+                if 'user_id' not in member_cols:
                     _safe_add_column(conn, 'members', 'user_id', "VARCHAR(64)")
-                if is_pg or 'joined_at' not in member_cols:
+                if 'joined_at' not in member_cols:
                     _safe_add_column(conn, 'members', 'joined_at', dt_type)
 
             if 'expenses' in existing_tables:
                 exp_cols = {c['name'] for c in inspector.get_columns('expenses')}
-                if is_pg or 'created_at' not in exp_cols:
+                if 'created_at' not in exp_cols:
                     _safe_add_column(conn, 'expenses', 'created_at', dt_type)
-                if is_pg or 'updated_at' not in exp_cols:
+                if 'updated_at' not in exp_cols:
                     _safe_add_column(conn, 'expenses', 'updated_at', dt_type)
-                if is_pg or 'split_type' not in exp_cols:
+                if 'split_type' not in exp_cols:
                     _safe_add_column(conn, 'expenses', 'split_type', "VARCHAR(20) DEFAULT 'EQUAL'")
-                if is_pg or 'splits_json' not in exp_cols:
+                if 'splits_json' not in exp_cols:
                     _safe_add_column(conn, 'expenses', 'splits_json', "TEXT DEFAULT '{}'")
-                if is_pg or 'date' not in exp_cols:
+                if 'date' not in exp_cols:
                     _safe_add_column(conn, 'expenses', 'date', "VARCHAR(20)")
-                if is_pg or 'notes' not in exp_cols:
+                if 'notes' not in exp_cols:
                     _safe_add_column(conn, 'expenses', 'notes', "TEXT")
 
             if 'settlements' in existing_tables:
                 set_cols = {c['name'] for c in inspector.get_columns('settlements')}
-                if is_pg or 'created_at' not in set_cols:
+                if 'created_at' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'created_at', dt_type)
-                if is_pg or 'updated_at' not in set_cols:
+                if 'updated_at' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'updated_at', dt_type)
-                if is_pg or 'transaction_id' not in set_cols:
+                if 'transaction_id' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'transaction_id', "VARCHAR(100)")
-                if is_pg or 'upi_txn_id' not in set_cols:
+                if 'upi_txn_id' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'upi_txn_id', "VARCHAR(100)")
-                if is_pg or 'reference_note' not in set_cols:
+                if 'reference_note' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'reference_note', "TEXT")
-                if is_pg or 'proof_image' not in set_cols:
+                if 'proof_image' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'proof_image', "TEXT")
-                if is_pg or 'proof_filename' not in set_cols:
+                if 'proof_filename' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'proof_filename', "VARCHAR(255)")
-                if is_pg or 'proof_content_type' not in set_cols:
+                if 'proof_content_type' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'proof_content_type', "VARCHAR(100)")
-                if is_pg or 'proof_size_bytes' not in set_cols:
+                if 'proof_size_bytes' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'proof_size_bytes', "INTEGER")
-                if is_pg or 'proof_uploaded_at' not in set_cols:
+                if 'proof_uploaded_at' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'proof_uploaded_at', dt_type)
-                if is_pg or 'timestamp' not in set_cols:
+                if 'timestamp' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'timestamp', "VARCHAR(50)")
-                if is_pg or 'submitted_at' not in set_cols:
+                if 'submitted_at' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'submitted_at', dt_type)
-                if is_pg or 'confirmed_at' not in set_cols:
+                if 'confirmed_at' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'confirmed_at', dt_type)
-                if is_pg or 'confirmed_by' not in set_cols:
+                if 'confirmed_by' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'confirmed_by', "VARCHAR(64)")
-                if is_pg or 'rejected_at' not in set_cols:
+                if 'rejected_at' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'rejected_at', dt_type)
-                if is_pg or 'rejection_reason' not in set_cols:
+                if 'rejection_reason' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'rejection_reason', "VARCHAR(255)")
-                if is_pg or 'rejection_notes' not in set_cols:
+                if 'rejection_notes' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'rejection_notes', "TEXT")
-                if is_pg or 'disputed_at' not in set_cols:
+                if 'disputed_at' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'disputed_at', dt_type)
-                if is_pg or 'dispute_notes' not in set_cols:
+                if 'dispute_notes' not in set_cols:
                     _safe_add_column(conn, 'settlements', 'dispute_notes', "TEXT")
 
             if 'join_requests' in existing_tables:
                 jr_cols = {c['name'] for c in inspector.get_columns('join_requests')}
-                if is_pg or 'name' not in jr_cols:
+                if 'name' not in jr_cols:
                     _safe_add_column(conn, 'join_requests', 'name', "VARCHAR(120)")
                     if 'applicant_name' in jr_cols:
                         conn.execute(text("UPDATE join_requests SET name = applicant_name WHERE name IS NULL"))
 
-                if is_pg or 'email' not in jr_cols:
+                if 'email' not in jr_cols:
                     _safe_add_column(conn, 'join_requests', 'email', "VARCHAR(150)")
                     if 'applicant_email' in jr_cols:
                         conn.execute(text("UPDATE join_requests SET email = applicant_email WHERE email IS NULL"))
 
-                if is_pg or 'phone' not in jr_cols:
+                if 'phone' not in jr_cols:
                     _safe_add_column(conn, 'join_requests', 'phone', "VARCHAR(50)")
                     if 'applicant_phone' in jr_cols:
                         conn.execute(text("UPDATE join_requests SET phone = applicant_phone WHERE phone IS NULL"))
 
-                if is_pg or 'upi_id' not in jr_cols:
+                if 'upi_id' not in jr_cols:
                     _safe_add_column(conn, 'join_requests', 'upi_id', "VARCHAR(100)")
                     if 'applicant_upi' in jr_cols:
                         conn.execute(text("UPDATE join_requests SET upi_id = applicant_upi WHERE upi_id IS NULL"))

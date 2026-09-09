@@ -9,7 +9,7 @@ const LAST_ROOM_KEY = 'settleup_last_room_id';
 const USER_PROFILE_KEY = 'settleup_user_profile';
 const AUTH_TOKEN_KEY = 'settleup_auth_token';
 const AUTH_USER_KEY = 'settleup_auth_user';
-const API_BASE = '/api';
+const API_BASE = (typeof window !== 'undefined' && window.SETTLEUP_API_BASE) ? window.SETTLEUP_API_BASE : '/api';
 
 export const CURRENCIES = {
   USD: { symbol: '$', code: 'USD', name: 'US Dollar (USD)', rate: 1.0 },

@@ -13,6 +13,20 @@ from .auth import token_required, optional_auth, generate_auth_token, rate_limit
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
 
+@api_bp.route('', methods=['GET'])
+@api_bp.route('/', methods=['GET'])
+def api_root():
+    """API root status endpoint."""
+    return jsonify({
+        'status': 'ok',
+        'message': 'Settle Up REST API is running',
+        'endpoints': {
+            'health': '/api/health',
+            'rooms': '/api/rooms'
+        }
+    }), 200
+
+
 @api_bp.route('/health', methods=['GET'])
 def health():
     """Health check endpoint."""
