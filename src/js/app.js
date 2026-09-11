@@ -640,43 +640,50 @@ function renderAnalyticsTab() {
   });
 
   if (memberMatrixEl) {
-    memberMatrixEl.innerHTML = currentRoom.members.map(member => {
-      const paid = paidMap[member.id] || 0;
-      const consumed = consumedMap[member.id] || 0;
-      const net = balances[member.id] || 0;
+    if (currentRoom.members.length === 0) {
+      memberMatrixEl.innerHTML = `<p style="color: var(--text-muted); padding: 1rem 0;">No members in this room yet.</p>`;
+    } else {
+      const rowsHtml = currentRoom.members.map(member => {
+        const paid = paidMap[member.id] || 0;
+        const consumed = consumedMap[member.id] || 0;
+        const net = balances[member.id] || 0;
 
-      let netBadge = `<span class="balance-zero font-mono">$0.00</span>`;
-      if (net > 0.01) {
-        netBadge = `<span class="balance-positive font-mono">+${formatCurrency(net, currency)}</span>`;
-      } else if (net < -0.01) {
-        netBadge = `<span class="balance-negative font-mono">-${formatCurrency(Math.abs(net), currency)}</span>`;
-      }
+        let netBadge = `<span class="balance-zero font-mono">$0.00</span>`;
+        if (net > 0.01) {
+          netBadge = `<span class="balance-positive font-mono">+${formatCurrency(net, currency)}</span>`;
+        } else if (net < -0.01) {
+          netBadge = `<span class="balance-negative font-mono">-${formatCurrency(Math.abs(net), currency)}</span>`;
+        }
 
-      return `
-        <div class="member-stat-row">
-          <div style="display: flex; align-items: center; gap: 0.65rem;">
-            <div class="member-avatar" style="width: 28px; height: 28px; font-size: 0.75rem; background-color: ${member.avatarColor};">
-              ${(member.name || 'U').charAt(0).toUpperCase()}
+        return `
+          <div class="matrix-row">
+            <div class="matrix-col-member">
+              <div class="member-avatar" style="width: 28px; height: 28px; font-size: 0.75rem; background-color: ${member.avatarColor}; flex-shrink: 0;">
+                ${(member.name || 'U').charAt(0).toUpperCase()}
+              </div>
+              <strong title="${escapeHtml(member.name)}">${escapeHtml(member.name)}</strong>
             </div>
-            <strong>${escapeHtml(member.name)}</strong>
+            <div class="matrix-col-paid font-mono">${formatCurrency(paid, currency)}</div>
+            <div class="matrix-col-share font-mono">${formatCurrency(consumed, currency)}</div>
+            <div class="matrix-col-net">${netBadge}</div>
           </div>
-          <div style="display: flex; align-items: center; gap: 1.5rem;">
-            <div style="text-align: right;">
-              <div style="font-size: 0.7rem; color: var(--text-muted);">PAID</div>
-              <div class="font-mono" style="font-size: 0.85rem;">${formatCurrency(paid, currency)}</div>
+        `;
+      }).join('');
+
+      memberMatrixEl.innerHTML = `
+        <div class="matrix-container">
+          <div class="matrix-grid">
+            <div class="matrix-header-row">
+              <div class="matrix-col-member">Member</div>
+              <div class="matrix-col-paid">Paid</div>
+              <div class="matrix-col-share">Share</div>
+              <div class="matrix-col-net">Net</div>
             </div>
-            <div style="text-align: right;">
-              <div style="font-size: 0.7rem; color: var(--text-muted);">SHARE</div>
-              <div class="font-mono" style="font-size: 0.85rem;">${formatCurrency(consumed, currency)}</div>
-            </div>
-            <div style="text-align: right; min-width: 80px;">
-              <div style="font-size: 0.7rem; color: var(--text-muted);">NET</div>
-              <div>${netBadge}</div>
-            </div>
+            ${rowsHtml}
           </div>
         </div>
       `;
-    }).join('');
+    }
   }
 
   // 3. Top Insights
