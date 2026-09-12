@@ -193,6 +193,15 @@ def init_database(app):
                     if 'applicant_upi' in jr_cols:
                         conn.execute(text("UPDATE join_requests SET upi_id = applicant_upi WHERE upi_id IS NULL"))
 
+            # Data cleanup for existing records: Ensure room owners and placeholder hosts have role='HOST'
+            if 'members' in existing_tables:
+                conn.execute(text("UPDATE members SET role = 'HOST' WHERE (role IS NULL OR role = 'MEMBER') AND (name = 'You (Host)' OR name LIKE '%(Host)%' OR id IN (SELECT owner_id FROM rooms WHERE owner_id IS NOT NULL))"))
+                if 'users' in existing_tables:
+                    conn.execute(text("UPDATE members SET user_id = (SELECT users.id FROM users WHERE LOWER(users.email) = LOWER(members.google_id) LIMIT 1) WHERE (user_id IS NULL OR user_id = '') AND google_id IS NOT NULL AND google_id != '' AND LOWER(google_id) IN (SELECT LOWER(email) FROM users)"))
+                    if 'rooms' in existing_tables:
+                        conn.execute(text("UPDATE rooms SET owner_id = (SELECT members.user_id FROM members WHERE members.id = rooms.owner_id AND members.user_id IS NOT NULL LIMIT 1) WHERE owner_id IS NOT NULL AND EXISTS (SELECT 1 FROM members WHERE members.id = rooms.owner_id AND members.user_id IS NOT NULL)"))
+                        conn.execute(text("UPDATE rooms SET owner_id = (SELECT members.user_id FROM members WHERE members.room_id = rooms.id AND members.user_id IS NOT NULL AND members.role = 'HOST' LIMIT 1) WHERE (owner_id IS NULL OR owner_id NOT LIKE 'usr_%') AND EXISTS (SELECT 1 FROM members WHERE members.room_id = rooms.id AND members.user_id IS NOT NULL AND members.role = 'HOST')"))
+
             conn.commit()
 
         # 3. Seed default sample trip if absent (skip in production unless explicitly requested)
@@ -374,14 +383,81 @@ def seed_sample_room(room_id='GOA2026', overwrite=False):
 
 
 # Room Operations
-def get_room(room_id):
+def get_room(room_id, user=None):
     if not room_id:
         return None
     norm_id = room_id.upper()
     room = db.session.get(Room, norm_id)
     if not room and norm_id == 'GOA2026':
         return seed_sample_room('GOA2026')
-    return room.to_dict() if room else None
+    if not room:
+        return None
+
+    # Auto-claim/associate unassigned demo room if accessed by an authenticated user
+    if user and room.status == 'ACTIVE':
+        str_user_id = str(user.id)
+        user_email = (user.email or '').strip().lower()
+        user_mem = next((m for m in room.members if (m.user_id and str(m.user_id) == str_user_id) or (user_email and m.google_id and m.google_id.lower() == user_email)), None)
+        has_registered_user = any(m.user_id is not None for m in room.members)
+        is_placeholder_owner = (not room.owner_id) or not str(room.owner_id).startswith("usr_")
+
+        if user_mem:
+            changed = False
+            if not user_mem.user_id:
+                user_mem.user_id = user.id
+                changed = True
+            # If the room has no registered owner, promote this registered user to HOST and set room.owner_id
+            if is_placeholder_owner:
+                other_registered_host = any(m.user_id and str(m.user_id) != str_user_id and (m.role or '').upper() in ('HOST', 'ADMIN') for m in room.members)
+                if not other_registered_host:
+                    room.owner_id = user.id
+                    user_mem.role = 'HOST'
+                    changed = True
+            elif str(room.owner_id) == str_user_id:
+                if (user_mem.role or '').upper() != 'HOST':
+                    user_mem.role = 'HOST'
+                    changed = True
+            if changed:
+                db.session.commit()
+        elif is_placeholder_owner and not has_registered_user:
+            # Unassigned demo room or orphan room without registered users!
+            # 1. Check if there's an explicit placeholder host member to claim
+            placeholder_host = next((m for m in room.members if (m.name and (m.name.lower() in ('you (host)', 'host', 'you') or '(host)' in m.name.lower())) or (m.google_id and m.google_id.lower() in ('host@gmail.com', 'host@settleup.app')) or (room.owner_id and str(m.id) == str(room.owner_id))), None)
+
+            if placeholder_host and placeholder_host.user_id is None:
+                placeholder_host.user_id = user.id
+                placeholder_host.name = user.name
+                placeholder_host.google_id = user.email
+                placeholder_host.role = 'HOST'
+                if user.avatar_color:
+                    placeholder_host.avatar_color = user.avatar_color
+                if user.upi_id:
+                    placeholder_host.upi_id = user.upi_id
+                if user.phone:
+                    placeholder_host.phone_number = user.phone
+                room.owner_id = user.id
+                db.session.commit()
+            else:
+                # No placeholder host member exists in the room (e.g. members are Bob and Charlie, neither is placeholder)
+                # DO NOT overwrite Bob or Charlie! Add the authenticated user as the HOST member!
+                host_mem_id = f"{norm_id}_mem_1" if not any(m.id == f"{norm_id}_mem_1" for m in room.members) else f"{norm_id}_mem_{int(datetime.now().timestamp() * 1000)}"
+                host_gm = GroupMember(
+                    id=host_mem_id,
+                    room_id=norm_id,
+                    user_id=user.id,
+                    name=user.name,
+                    google_id=user.email,
+                    phone_number=user.phone or '+1-555-0100',
+                    avatar_color=user.avatar_color or '#6366f1',
+                    upi_id=user.upi_id or '',
+                    role='HOST',
+                    joined_at=get_utc_now()
+                )
+                db.session.add(host_gm)
+                room.owner_id = user.id
+                db.session.commit()
+
+    return room.to_dict()
 
 
 def get_room_public_info(room_id):
@@ -437,45 +513,115 @@ def create_room(room_id, name=None, currency='USD', members=None, owner_id=None)
         return existing.to_dict()
 
     now = get_utc_now()
-    members_list = members or [
-        {
-            'id': f"{norm_id}_mem_1",
-            'name': 'You (Host)',
-            'email': 'host@gmail.com',
-            'phone': '+1-555-0100',
-            'avatarColor': '#6366f1',
-            'upiId': 'host@upi'
-        },
-        {
-            'id': f"{norm_id}_mem_2",
-            'name': 'Alex',
-            'email': 'alex@gmail.com',
-            'phone': '+1-555-0102',
-            'avatarColor': '#10b981',
-            'upiId': 'alex@upi'
-        }
-    ]
+    creator_user = db.session.get(User, str(owner_id)) if owner_id else None
+
+    if members:
+        members_list = [dict(m) for m in members]
+        if creator_user:
+            # Check if creator is already represented
+            found = False
+            for m in members_list:
+                m_uid = m.get('userId') or m.get('user_id')
+                m_email = (m.get('email') or m.get('googleId') or '').strip().lower()
+                if (m_uid and str(m_uid) == str(creator_user.id)) or (creator_user.email and m_email == creator_user.email.lower()) or m.get('role') == 'HOST':
+                    m['userId'] = creator_user.id
+                    m['name'] = creator_user.name
+                    m['email'] = creator_user.email
+                    m['googleId'] = creator_user.email
+                    m['role'] = 'HOST'
+                    found = True
+                    break
+            if not found:
+                members_list.insert(0, {
+                    'id': f"{norm_id}_mem_1",
+                    'userId': creator_user.id,
+                    'name': creator_user.name,
+                    'email': creator_user.email,
+                    'googleId': creator_user.email,
+                    'phone': creator_user.phone or '',
+                    'avatarColor': creator_user.avatar_color or '#6366f1',
+                    'upiId': creator_user.upi_id or '',
+                    'role': 'HOST'
+                })
+    else:
+        if creator_user:
+            members_list = [
+                {
+                    'id': f"{norm_id}_mem_1",
+                    'userId': creator_user.id,
+                    'name': creator_user.name,
+                    'email': creator_user.email,
+                    'googleId': creator_user.email,
+                    'phone': creator_user.phone or '+1-555-0100',
+                    'avatarColor': creator_user.avatar_color or '#6366f1',
+                    'upiId': creator_user.upi_id or '',
+                    'role': 'HOST'
+                },
+                {
+                    'id': f"{norm_id}_mem_2",
+                    'name': 'Alex',
+                    'email': 'alex@gmail.com',
+                    'phone': '+1-555-0102',
+                    'avatarColor': '#10b981',
+                    'upiId': 'alex@upi',
+                    'role': 'MEMBER'
+                }
+            ]
+        else:
+            members_list = [
+                {
+                    'id': f"{norm_id}_mem_1",
+                    'name': 'You (Host)',
+                    'email': 'host@gmail.com',
+                    'phone': '+1-555-0100',
+                    'avatarColor': '#6366f1',
+                    'upiId': 'host@upi',
+                    'role': 'HOST'
+                },
+                {
+                    'id': f"{norm_id}_mem_2",
+                    'name': 'Alex',
+                    'email': 'alex@gmail.com',
+                    'phone': '+1-555-0102',
+                    'avatarColor': '#10b981',
+                    'upiId': 'alex@upi',
+                    'role': 'MEMBER'
+                }
+            ]
+
+    final_owner_id = creator_user.id if creator_user else (owner_id or members_list[0].get('id'))
 
     room = Room(
         id=norm_id,
         name=name or f"Trip / Room #{norm_id}",
         currency=currency or 'USD',
         status='ACTIVE',
-        owner_id=owner_id or members_list[0]['id'],
+        owner_id=final_owner_id,
         created_at=now,
         updated_at=now
     )
     db.session.add(room)
 
-    for m in members_list:
+    for i, m in enumerate(members_list):
+        m_role = m.get('role')
+        if not m_role:
+            m_role = 'HOST' if (i == 0 or m.get('id') == final_owner_id) else 'MEMBER'
+
+        m_user_id = m.get('userId') or m.get('user_id')
+        if creator_user and (m.get('id') == f"{norm_id}_mem_1" or m_role == 'HOST' or (creator_user.email and (m.get('email') or m.get('googleId') or '').lower() == creator_user.email.lower())):
+            m_user_id = creator_user.id
+            m_role = 'HOST'
+
         gm = GroupMember(
-            id=m.get('id') or f"{norm_id}_mem_{int(datetime.now().timestamp()*1000)}",
+            id=m.get('id') or f"{norm_id}_mem_{int(datetime.now().timestamp()*1000)}_{i+1}",
             room_id=norm_id,
+            user_id=m_user_id,
             name=m.get('name', 'Member'),
             google_id=m.get('email') or m.get('googleId'),
             phone_number=m.get('phone') or m.get('phoneNumber'),
             avatar_color=m.get('avatarColor', '#6366f1'),
             upi_id=m.get('upiId', ''),
+            role=m_role,
             joined_at=now
         )
         db.session.add(gm)
@@ -484,7 +630,7 @@ def create_room(room_id, name=None, currency='USD', members=None, owner_id=None)
     return room.to_dict()
 
 
-def save_full_room(room_data):
+def save_full_room(room_data, user=None):
     if not room_data or not room_data.get('id'):
         raise ValueError("Invalid room data")
 
@@ -499,7 +645,18 @@ def save_full_room(room_data):
     room.name = room_data.get('name', room.name or f"Trip #{norm_id}")
     room.currency = room_data.get('currency', room.currency or 'USD')
     room.status = room_data.get('status', room.status or 'ACTIVE')
-    room.owner_id = room_data.get('ownerId', room.owner_id)
+
+    incoming_owner = room_data.get('ownerId')
+    if user:
+        if not room.owner_id or room.owner_id.startswith(f"{norm_id}_") or room.owner_id == 'mem_1':
+            room.owner_id = user.id
+        elif incoming_owner and incoming_owner == user.id:
+            room.owner_id = user.id
+    elif incoming_owner:
+        room.owner_id = incoming_owner
+    elif not room.owner_id:
+        room.owner_id = None
+
     room.updated_at = now
     room.completed_at = parse_date(room_data.get('completedAt'))
     room.archived_at = parse_date(room_data.get('archivedAt'))
@@ -508,11 +665,29 @@ def save_full_room(room_data):
     if 'members' in room_data:
         existing_mems = {m.id: m for m in room.members}
         incoming_ids = set()
-        for m in room_data['members']:
+        for i, m in enumerate(room_data['members']):
             m_id = m.get('id')
             if not m_id:
                 continue
             incoming_ids.add(m_id)
+
+            m_user_id = m.get('userId') or m.get('user_id')
+            m_role = m.get('role')
+
+            if user:
+                if (m_user_id and str(m_user_id) == str(user.id)) or (user.email and (m.get('email') or m.get('googleId') or '').lower() == user.email.lower()):
+                    m_user_id = user.id
+                    m_role = 'HOST'
+                elif (not m_user_id) and (i == 0 or m_id == room.owner_id or m_role == 'HOST'):
+                    m_user_id = user.id
+                    m_role = 'HOST'
+
+            if not m_role:
+                if room.owner_id and (str(room.owner_id) == str(m_id) or (m_user_id and str(room.owner_id) == str(m_user_id))):
+                    m_role = 'HOST'
+                else:
+                    m_role = 'MEMBER'
+
             if m_id in existing_mems:
                 gm = existing_mems[m_id]
                 gm.name = m.get('name', gm.name)
@@ -520,15 +695,21 @@ def save_full_room(room_data):
                 gm.phone_number = m.get('phone') or m.get('phoneNumber', gm.phone_number)
                 gm.avatar_color = m.get('avatarColor', gm.avatar_color)
                 gm.upi_id = m.get('upiId', gm.upi_id)
+                if m_role:
+                    gm.role = m_role
+                if m_user_id:
+                    gm.user_id = m_user_id
             else:
                 gm = GroupMember(
                     id=m_id,
                     room_id=norm_id,
+                    user_id=m_user_id,
                     name=m.get('name', 'Member'),
                     google_id=m.get('email') or m.get('googleId'),
                     phone_number=m.get('phone') or m.get('phoneNumber'),
                     avatar_color=m.get('avatarColor', '#6366f1'),
                     upi_id=m.get('upiId', ''),
+                    role=m_role,
                     joined_at=now
                 )
                 db.session.add(gm)
@@ -747,15 +928,24 @@ def update_member(room_id, member_id, member_data):
     return gm.room.to_dict()
 
 
-def delete_member(room_id, member_id):
+def delete_member(room_id, member_id, actor_user_id=None):
     norm_id = (room_id or '').upper()
     room = db.session.get(Room, norm_id)
     if not room:
         return None, False, "Room not found"
 
+    if actor_user_id:
+        if not is_user_room_host_or_admin(norm_id, actor_user_id):
+            return room.to_dict(), False, "Only authorized room hosts or admins can remove members."
+
     gm = GroupMember.query.filter_by(id=member_id, room_id=norm_id).first()
     if not gm:
         return room.to_dict(), False, "Member not found"
+
+    # Host protection: Cannot remove room host
+    is_host = (gm.role and gm.role.upper() in ('HOST', 'ADMIN')) or (room.owner_id and (str(room.owner_id) == str(gm.id) or (gm.user_id and str(room.owner_id) == str(gm.user_id))))
+    if is_host and (len(room.members) <= 1 or (room.owner_id and (str(room.owner_id) == str(gm.id) or (gm.user_id and str(room.owner_id) == str(gm.user_id))))):
+        return room.to_dict(), False, "Cannot remove the room host."
 
     # Verify if member has expenses as payer or split participant
     for exp in room.expenses:
@@ -1629,6 +1819,16 @@ def is_user_room_host_or_admin(room_id, user_id):
         if is_user_member:
             if (m.role and m.role.upper() in ('HOST', 'ADMIN')) or (room.owner_id and str(room.owner_id) == str(m.id)):
                 return True
+            # If room has no registered owner, promote this registered member if no other member is host
+            if not room.owner_id or not str(room.owner_id).startswith("usr_"):
+                other_host = any(other.user_id and str(other.user_id) != str_user_id and (other.role or '').upper() in ('HOST', 'ADMIN') for other in room.members)
+                if not other_host:
+                    room.owner_id = user.id
+                    m.role = 'HOST'
+                    if not m.user_id:
+                        m.user_id = user.id
+                    db.session.commit()
+                    return True
 
     return False
 

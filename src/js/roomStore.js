@@ -438,18 +438,51 @@ export function loadRoom(roomId) {
     return sample;
   }
 
+  const authUser = getAuthenticatedUser() || getUserProfile();
+  const hostMember = authUser ? {
+    id: `${normalizedId}_mem_1`,
+    userId: authUser.id,
+    name: authUser.name || 'Host',
+    googleId: authUser.email || '',
+    email: authUser.email || '',
+    phoneNumber: authUser.phone || '',
+    phone: authUser.phone || '',
+    avatarColor: authUser.avatarColor || '#6366f1',
+    upiId: authUser.upiId || '',
+    role: 'HOST'
+  } : {
+    id: `${normalizedId}_mem_1`,
+    name: 'You (Host)',
+    googleId: '',
+    email: '',
+    phoneNumber: '+1-555-0100',
+    phone: '+1-555-0100',
+    avatarColor: '#6366f1',
+    upiId: 'host@upi',
+    role: 'HOST'
+  };
+
+  const partnerMember = {
+    id: `${normalizedId}_mem_2`,
+    name: 'Alex',
+    googleId: 'alex@gmail.com',
+    email: 'alex@gmail.com',
+    phoneNumber: '+1-555-0102',
+    phone: '+1-555-0102',
+    avatarColor: '#10b981',
+    upiId: 'alex@upi',
+    role: 'MEMBER'
+  };
+
   const newRoom = {
     id: normalizedId,
     name: `Trip / Room #${normalizedId}`,
     currency: 'USD',
     status: 'ACTIVE',
-    ownerId: `${normalizedId}_mem_1`,
+    ownerId: authUser?.id || hostMember.id,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    members: [
-      { id: `${normalizedId}_mem_1`, name: 'You (Host)', googleId: 'host@gmail.com', phoneNumber: '+1-555-0100', avatarColor: '#6366f1', upiId: 'host@upi', phone: '+1-555-0100' },
-      { id: `${normalizedId}_mem_2`, name: 'Alex', googleId: 'alex@gmail.com', phoneNumber: '+1-555-0102', avatarColor: '#10b981', upiId: 'alex@upi', phone: '+1-555-0102' }
-    ],
+    members: [hostMember, partnerMember],
     expenses: [],
     settlements: []
   };

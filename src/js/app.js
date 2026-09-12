@@ -306,13 +306,17 @@ function renderMemberBar() {
     ].filter(Boolean);
     const tooltipText = tooltipParts.join(' | ');
 
+    const isHost = (member.role && (member.role.toUpperCase() === 'HOST' || member.role.toUpperCase() === 'ADMIN')) ||
+                   (currentRoom.ownerId && (String(currentRoom.ownerId) === String(member.id) || (member.userId && String(currentRoom.ownerId) === String(member.userId))));
+    const roleBadge = isHost ? `<span class="host-badge" style="font-size: 0.65rem; background: rgba(99, 102, 241, 0.2); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.4); padding: 1px 5px; border-radius: 4px; margin-left: 5px; font-weight: 600; text-transform: uppercase;">Host</span>` : '';
+
     return `
       <div class="member-chip" onclick="${isReadOnly ? '' : `window.app.openEditMemberModal('${escapeHtml(member.id)}')`}" title="${escapeHtml(tooltipText)}">
         <div class="member-avatar" style="background-color: ${member.avatarColor || '#6366f1'}">
           ${escapeHtml(initial)}
         </div>
         <div class="member-info">
-          <span class="member-name">${escapeHtml(member.name)}</span>
+          <span class="member-name">${escapeHtml(member.name)}${roleBadge}</span>
           <span class="member-balance ${balanceClass}">${balanceText}</span>
         </div>
       </div>
@@ -2886,18 +2890,51 @@ export async function confirmCreateRoom() {
     return;
   }
 
+  const authUser = getAuthenticatedUser() || getUserProfile();
+  const hostMember = authUser ? {
+    id: `${roomId}_mem_1`,
+    userId: authUser.id,
+    name: authUser.name || 'Host',
+    googleId: authUser.email || '',
+    email: authUser.email || '',
+    phoneNumber: authUser.phone || '',
+    phone: authUser.phone || '',
+    avatarColor: authUser.avatarColor || '#6366f1',
+    upiId: authUser.upiId || '',
+    role: 'HOST'
+  } : {
+    id: `${roomId}_mem_1`,
+    name: 'You (Host)',
+    googleId: '',
+    email: '',
+    phoneNumber: '+1-555-0100',
+    phone: '+1-555-0100',
+    avatarColor: '#6366f1',
+    upiId: 'host@upi',
+    role: 'HOST'
+  };
+
+  const partnerMember = {
+    id: `${roomId}_mem_2`,
+    name: 'Alex',
+    googleId: 'alex@gmail.com',
+    email: 'alex@gmail.com',
+    phoneNumber: '+1-555-0102',
+    phone: '+1-555-0102',
+    avatarColor: '#10b981',
+    upiId: 'alex@upi',
+    role: 'MEMBER'
+  };
+
   const newRoom = {
     id: roomId,
     name: roomName || `Room #${roomId}`,
     currency: 'USD',
     status: 'ACTIVE',
+    ownerId: authUser?.id || hostMember.id,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    members: [
-      { id: `${roomId}_mem_1`, name: 'Alice', googleId: 'alice@gmail.com', phoneNumber: '+1-555-0101', phone: '+1-555-0101', avatarColor: '#6366f1', upiId: 'alice@upi' },
-      { id: `${roomId}_mem_2`, name: 'Bob', googleId: 'bob@gmail.com', phoneNumber: '+1-555-0102', phone: '+1-555-0102', avatarColor: '#10b981', upiId: 'bob@upi' },
-      { id: `${roomId}_mem_3`, name: 'Charlie', googleId: 'charlie@gmail.com', phoneNumber: '+1-555-0103', phone: '+1-555-0103', avatarColor: '#ec4899', upiId: 'charlie@upi' }
-    ],
+    members: [hostMember, partnerMember],
     expenses: [],
     settlements: []
   };
@@ -3107,6 +3144,18 @@ export async function handleLoginSubmit(event) {
     showToast(`Welcome back, ${res.user.name}! 👋`);
     if (emailInput) emailInput.value = '';
     if (passwordInput) passwordInput.value = '';
+
+    // Synchronize current room with newly authenticated session
+    if (currentRoom && currentRoom.id) {
+      loadRoomAsync(currentRoom.id).then(updatedRoom => {
+        if (updatedRoom) {
+          currentRoom = updatedRoom;
+          renderApp();
+        }
+      }).catch(e => console.warn('Could not sync room on login:', e));
+    }
+    refreshUserInvitationsList().catch(() => {});
+    checkUserInvitationsBadgeCount().catch(() => {});
   } else {
     if (alertEl) {
       alertEl.className = 'auth-alert-error';
@@ -3140,10 +3189,10 @@ export async function handleSignupSubmit(event) {
     }
     return;
   }
-  if (!email) {
+  if (!email || !email.includes('@')) {
     if (alertEl) {
       alertEl.className = 'auth-alert-error';
-      alertEl.innerText = 'Valid email is required.';
+      alertEl.innerText = 'Please enter a valid email address.';
       alertEl.style.display = 'block';
     }
     return;
@@ -3183,6 +3232,18 @@ export async function handleSignupSubmit(event) {
     if (nameInput) nameInput.value = '';
     if (emailInput) emailInput.value = '';
     if (passwordInput) passwordInput.value = '';
+
+    // Synchronize current room with newly authenticated session
+    if (currentRoom && currentRoom.id) {
+      loadRoomAsync(currentRoom.id).then(updatedRoom => {
+        if (updatedRoom) {
+          currentRoom = updatedRoom;
+          renderApp();
+        }
+      }).catch(e => console.warn('Could not sync room on signup:', e));
+    }
+    refreshUserInvitationsList().catch(() => {});
+    checkUserInvitationsBadgeCount().catch(() => {});
   } else {
     if (alertEl) {
       alertEl.className = 'auth-alert-error';
@@ -3207,6 +3268,15 @@ export async function logoutAction() {
   if (menu) menu.classList.remove('show');
   updateHeaderAuthUI();
   showToast('Logged out successfully');
+
+  if (currentRoom && currentRoom.id) {
+    loadRoomAsync(currentRoom.id).then(updatedRoom => {
+      if (updatedRoom) {
+        currentRoom = updatedRoom;
+        renderApp();
+      }
+    }).catch(() => {});
+  }
 }
 
 export async function openUserProfileModal() {

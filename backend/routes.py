@@ -3,12 +3,15 @@ Settle Up - RESTful API Blueprint Routes (Database-backed)
 Handles rooms, members, expenses, settlements, join requests, and greedy debt simplification.
 """
 
+import logging
 from flask import Blueprint, request, jsonify, send_file, make_response, redirect
 from . import db_service
 from . import algorithm
 from . import proof_storage
 from .models import db, Room, Settlement, GroupMember
 from .auth import token_required, optional_auth, generate_auth_token, rate_limit
+
+logger = logging.getLogger(__name__)
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -75,12 +78,16 @@ def create_or_save_room():
     if not room_id:
         return jsonify({'error': 'Room ID is required'}), 400
 
+    current_user = getattr(request, 'current_user', None)
     owner_id = data.get('ownerId')
-    if not owner_id and getattr(request, 'current_user', None):
-        owner_id = request.current_user.id
+    if current_user:
+        if not owner_id or owner_id.startswith(f"{room_id}_") or owner_id == 'mem_1':
+            owner_id = current_user.id
 
     if 'members' in data and 'expenses' in data:
-        saved = db_service.save_full_room(data)
+        if owner_id:
+            data['ownerId'] = owner_id
+        saved = db_service.save_full_room(data, user=current_user)
         return jsonify({'room': saved, 'message': 'Room saved successfully'}), 200
     else:
         new_room = db_service.create_room(
@@ -104,9 +111,12 @@ def get_room_public(room_id):
 
 
 @api_bp.route('/rooms/<room_id>', methods=['GET'])
+@optional_auth
 def get_room(room_id):
     """Retrieve full room data."""
-    room = db_service.get_room(room_id)
+    current_user = getattr(request, 'current_user', None)
+    logger.info("GET /api/rooms/%s - user_id=%s, authenticated=%s", room_id, current_user.id if current_user else None, current_user is not None)
+    room = db_service.get_room(room_id, user=current_user)
     if not room:
         return jsonify({'error': 'Room not found'}), 404
     return jsonify({'room': room}), 200
@@ -236,17 +246,26 @@ def update_member(room_id, member_id):
 
 
 @api_bp.route('/rooms/<room_id>/members/<member_id>', methods=['DELETE'])
+@optional_auth
 def delete_member(room_id, member_id):
-    """Delete a member if they have no expenses or debt dependencies."""
-    room = db_service.get_room(room_id)
+    """Delete a member if authorized and member has no expenses or debt dependencies."""
+    current_user = getattr(request, 'current_user', None)
+    actor_id = current_user.id if current_user else None
+
+    room = db_service.get_room(room_id, user=current_user)
     if not room:
         return jsonify({'error': 'Room not found'}), 404
     if room.get('status') in ('COMPLETED', 'DISCARDED'):
         return jsonify({'error': 'Cannot remove members from a completed or archived room.'}), 400
 
-    updated_room, success, msg = db_service.delete_member(room_id, member_id)
+    # If actor is authenticated, enforce that only hosts or admins can delete members
+    if actor_id and not db_service.is_user_room_host_or_admin(room_id, actor_id):
+        return jsonify({'error': 'Only authorized room hosts or admins can remove members.'}), 403
+
+    updated_room, success, msg = db_service.delete_member(room_id, member_id, actor_user_id=actor_id)
     if not success:
-        return jsonify({'error': msg, 'room': updated_room}), 400
+        status_code = 403 if 'authorized' in msg.lower() else 400
+        return jsonify({'error': msg, 'room': updated_room}), status_code
     return jsonify({'room': updated_room, 'message': msg}), 200
 
 
@@ -732,7 +751,7 @@ def create_room_invitation(room_id):
     Body: { "invitee_id": "usr_...", "message": "...", "expires_at": "..." }
     """
     data = request.get_json() or {}
-    invitee_id = data.get('invitee_id') or data.get('inviteeId') or data.get('email')
+    invitee_id = data.get('invitee_id') or data.get('inviteeId') or data.get('targetUserId') or data.get('email')
     if not invitee_id:
         return jsonify({'error': 'Target user identifier (invitee_id) is required'}), 400
 
@@ -747,7 +766,7 @@ def create_room_invitation(room_id):
     if not success:
         return jsonify({'error': msg, 'status': status_code}), status_code
 
-    return jsonify({'invitation': invitation, 'message': msg}), status_code
+    return jsonify({'invitation': invitation, 'message': msg, 'success': True}), status_code
 
 
 @api_bp.route('/invitations', methods=['GET'])

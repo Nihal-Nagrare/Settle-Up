@@ -150,8 +150,16 @@ class GroupMember(db.Model):
     joined_at = db.Column(db.DateTime, default=get_utc_now)
 
     def to_dict(self):
+        effective_role = (self.role or 'MEMBER').upper()
+        if self.room and self.room.owner_id:
+            str_owner = str(self.room.owner_id)
+            if str_owner == str(self.id) or (self.user_id and str_owner == str(self.user_id)):
+                if effective_role != 'ADMIN':
+                    effective_role = 'HOST'
+
         return {
             'id': self.id,
+            'userId': self.user_id,
             'name': self.name,
             'googleId': self.google_id,
             'email': self.google_id,
@@ -159,7 +167,7 @@ class GroupMember(db.Model):
             'phone': self.phone_number,
             'avatarColor': self.avatar_color,
             'upiId': self.upi_id,
-            'role': self.role,
+            'role': effective_role,
             'joinedAt': format_iso(self.joined_at)
         }
 
@@ -397,6 +405,10 @@ class RoomInvitation(db.Model):
             'status': eff_status,
             'room_id': self.room_id,
             'roomId': self.room_id,
+            'inviter_id': self.inviter_id,
+            'inviterId': self.inviter_id,
+            'invitee_id': self.invitee_id,
+            'inviteeId': self.invitee_id,
             'room': {
                 'id': self.room.id,
                 'name': self.room.name
