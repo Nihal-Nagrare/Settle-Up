@@ -360,6 +360,7 @@ async function apiRequest(endpoint, options = {}) {
       headers['Authorization'] = `Bearer ${token}`;
     }
     const res = await fetch(`${API_BASE}${endpoint}`, {
+      cache: 'no-store',
       ...options,
       headers
     });
@@ -615,6 +616,19 @@ export async function apiSearchRooms(queryStr) {
     return res.data.results;
   }
   return [];
+}
+
+/**
+ * Retrieves ultra-lightweight room synchronization snapshot (<20ms)
+ * for real-time join-request detection and badge tracking without loading full room.
+ */
+export async function apiGetRoomSyncState(roomId) {
+  if (!roomId) return null;
+  const res = await apiRequest(`/rooms/${encodeURIComponent(roomId.toUpperCase())}/sync-state`);
+  if (res.ok && res.data && res.data.syncState) {
+    return res.data.syncState;
+  }
+  return null;
 }
 
 /**

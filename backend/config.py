@@ -3,7 +3,6 @@ import secrets
 import logging
 from pathlib import Path
 from dotenv import load_dotenv
-from sqlalchemy.pool import NullPool
 
 logger = logging.getLogger(__name__)
 
@@ -83,11 +82,18 @@ class ProductionConfig(Config):
     SECRET_KEY = os.getenv('SECRET_KEY')
     SQLALCHEMY_DATABASE_URI = None  # Never silently default to SQLite in production
 
-    # Serverless connection pooling: NullPool prevents connection leaks across lambda containers
+    # Serverless connection pooling: Small QueuePool allows warm lambda containers to reuse
+    # TLS-negotiated connections against Neon's PgBouncer pooler without connection exhaustion.
     SQLALCHEMY_ENGINE_OPTIONS = {
-        'poolclass': NullPool,
+        'pool_size': 2,
+        'max_overflow': 3,
+        'pool_timeout': 10,
+        'pool_recycle': 300,
         'pool_pre_ping': True,
     }
+
+    # Production database schema is pre-initialized. Disable runtime DDL/migrations on request cold starts.
+    AUTO_INIT_DB = os.getenv('AUTO_INIT_DB', 'False').lower() in ('true', '1', 't')
 
     def __init__(self):
         super().__init__()

@@ -36,6 +36,7 @@ import {
   resetSampleRoomAsync,
   apiSearchRooms,
   apiGetRoomPublic,
+  apiGetRoomSyncState,
   apiSubmitJoinRequest,
   apiListJoinRequests,
   apiProcessJoinRequest,
@@ -158,8 +159,8 @@ export async function initApp() {
     openJoinRoomModal(targetRoomId);
   }
 
-  // 4. Background check for pending join requests badge
-  checkPendingJoinRequestsCount();
+  // 4. Start real-time background sync manager
+  syncManager.start(currentRoom.id);
 }
 
 // Render entire application UI
@@ -171,7 +172,9 @@ export function renderApp() {
   renderLifecycleBanner();
   renderMemberBar();
   renderActiveTab();
-  checkPendingJoinRequestsCount();
+  if (typeof syncManager !== 'undefined' && syncManager && syncManager.lastPendingRequestsCount !== null) {
+    checkPendingJoinRequestsCount(syncManager.lastPendingRequestsCount);
+  }
 }
 
 // Render Header, Status Badge & Controls
@@ -2320,7 +2323,12 @@ export function switchHubTab(tabName) {
   if (tabName === 'active') renderSavedRoomsList();
   if (tabName === 'invitations') refreshUserInvitationsList();
   if (tabName === 'archived') renderArchivedRoomsList();
-  if (tabName === 'requests') refreshJoinRequestsList();
+  if (tabName === 'requests') {
+    refreshJoinRequestsList();
+    if (typeof syncManager !== 'undefined' && syncManager) {
+      syncManager.scheduleNext(2000);
+    }
+  }
 }
 
 /* =========================================================================
@@ -2827,6 +2835,9 @@ export async function acceptJoinRequestAction(requestId) {
     currentRoom = res.room;
     renderApp();
     refreshJoinRequestsList();
+    if (typeof syncManager !== 'undefined' && syncManager) {
+      syncManager.pollOnce();
+    }
     triggerConfetti({ particleCount: 60 });
     showToast(`✅ Member added to room!`);
   } else {
@@ -2839,16 +2850,154 @@ export async function rejectJoinRequestAction(requestId) {
   if (res.success && res.room) {
     currentRoom = res.room;
     refreshJoinRequestsList();
+    if (typeof syncManager !== 'undefined' && syncManager) {
+      syncManager.pollOnce();
+    }
     showToast(`❌ Join request rejected`, 'info');
   } else {
     alert(res.error || 'Failed to reject request');
   }
 }
 
-export async function checkPendingJoinRequestsCount(preloadedRequests = null) {
-  if (!currentRoom || !currentRoom.id) return;
-  const requests = preloadedRequests || await apiListJoinRequests(currentRoom.id);
-  const pendingCount = requests.filter(r => r.status === 'PENDING').length;
+/* =========================================================================
+   Real-Time Join Request & Room State Sync Manager
+   ========================================================================= */
+
+export class RoomSyncManager {
+  constructor() {
+    this.timer = null;
+    this.activeRoomId = null;
+    this.lastPendingRequestsCount = null;
+    this.isPolling = false;
+    this.channel = (typeof window !== 'undefined' && 'BroadcastChannel' in window)
+      ? new BroadcastChannel('settleup_room_sync')
+      : null;
+
+    if (this.channel) {
+      this.channel.onmessage = (event) => {
+        const { type, roomId, pendingRequestsCount } = event.data || {};
+        if (type === 'SYNC_UPDATE' && roomId === this.activeRoomId) {
+          this.applySyncUpdate(pendingRequestsCount, false);
+        }
+      };
+    }
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          this.pollOnce();
+          this.scheduleNext(this.getInterval());
+        } else {
+          this.stopTimer();
+        }
+      });
+    }
+  }
+
+  getInterval() {
+    // Poll faster (2s) when Hub modal is open on 'requests' tab
+    if (typeof activeHubTab !== 'undefined' && activeHubTab === 'requests') {
+      const modal = document.getElementById('create-room-modal');
+      if (modal && modal.classList.contains('active')) {
+        return 2000;
+      }
+    }
+    // Default active foreground interval: 4.5 seconds
+    return 4500;
+  }
+
+  start(roomId) {
+    if (!roomId) return;
+    this.activeRoomId = roomId.toUpperCase();
+    this.stopTimer();
+    this.pollOnce();
+    this.scheduleNext(this.getInterval());
+  }
+
+  stopTimer() {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+  }
+
+  scheduleNext(ms) {
+    this.stopTimer();
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+      return; // Pause polling when window/tab is hidden
+    }
+    this.timer = setTimeout(() => {
+      this.pollOnce().finally(() => {
+        this.scheduleNext(this.getInterval());
+      });
+    }, ms);
+  }
+
+  async pollOnce() {
+    if (this.isPolling || !this.activeRoomId || !currentRoom || currentRoom.id !== this.activeRoomId) {
+      return;
+    }
+    this.isPolling = true;
+    try {
+      const state = await apiGetRoomSyncState(this.activeRoomId);
+      if (state && typeof state.pendingRequestsCount === 'number') {
+        this.applySyncUpdate(state.pendingRequestsCount, true);
+      }
+    } catch (e) {
+      console.warn('Sync poll error:', e);
+    } finally {
+      this.isPolling = false;
+    }
+  }
+
+  applySyncUpdate(pendingRequestsCount, broadcast = true) {
+    const prevCount = this.lastPendingRequestsCount;
+    this.lastPendingRequestsCount = pendingRequestsCount;
+
+    // Update badges
+    checkPendingJoinRequestsCount(pendingRequestsCount);
+
+    // If new request arrived in real-time
+    if (prevCount !== null && pendingRequestsCount > prevCount) {
+      showToast(`🔔 New join request received! (${pendingRequestsCount} pending)`, 'info');
+      // If requests tab is currently open, refresh list
+      if (typeof activeHubTab !== 'undefined' && activeHubTab === 'requests') {
+        refreshJoinRequestsList();
+      }
+    }
+
+    if (broadcast && this.channel) {
+      try {
+        this.channel.postMessage({
+          type: 'SYNC_UPDATE',
+          roomId: this.activeRoomId,
+          pendingRequestsCount
+        });
+      } catch (e) {}
+    }
+  }
+}
+
+export const syncManager = new RoomSyncManager();
+
+export async function checkPendingJoinRequestsCount(preloadedData = null) {
+  if (!currentRoom || !currentRoom.id) return 0;
+  let pendingCount = 0;
+
+  if (typeof preloadedData === 'number') {
+    pendingCount = preloadedData;
+  } else if (Array.isArray(preloadedData)) {
+    pendingCount = preloadedData.filter(r => r.status === 'PENDING').length;
+  } else {
+    // Optimized fast-path: Query lightweight sync-state (<20ms) instead of full join-requests array
+    const syncState = await apiGetRoomSyncState(currentRoom.id);
+    if (syncState && typeof syncState.pendingRequestsCount === 'number') {
+      pendingCount = syncState.pendingRequestsCount;
+    } else {
+      const requests = await apiListJoinRequests(currentRoom.id);
+      pendingCount = (requests || []).filter(r => r.status === 'PENDING').length;
+    }
+  }
 
   const headerBadge = document.getElementById('hub-pending-badge');
   const hubTabBadge = document.getElementById('hub-requests-badge');
@@ -2861,6 +3010,8 @@ export async function checkPendingJoinRequestsCount(preloadedRequests = null) {
     hubTabBadge.innerText = pendingCount;
     hubTabBadge.style.display = pendingCount > 0 ? 'inline-block' : 'none';
   }
+
+  return pendingCount;
 }
 
 export async function deleteSavedRoomHandler(roomId) {
@@ -3516,7 +3667,9 @@ window.app = {
   refreshUserInvitationsList,
   acceptInvitationAction,
   declineInvitationAction,
-  cancelInvitationAction
+  cancelInvitationAction,
+  // Real-time synchronization manager
+  syncManager
 };
 
 // Initialize on DOM load or immediately if already ready

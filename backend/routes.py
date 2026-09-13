@@ -110,6 +110,22 @@ def get_room_public(room_id):
     return jsonify({'room': public_info}), 200
 
 
+@api_bp.route('/rooms/<room_id>/sync-state', methods=['GET'])
+@optional_auth
+def get_room_sync_state(room_id):
+    """
+    Ultra-lightweight endpoint for real-time background synchronization.
+    Returns entity version and pending counts in <20ms without large joins.
+    """
+    current_user = getattr(request, 'current_user', None)
+    user_id = current_user.id if current_user else None
+    state = db_service.get_room_sync_state(room_id, user_id=user_id)
+    if not state:
+        return jsonify({'error': 'Room not found'}), 404
+    return jsonify({'syncState': state}), 200
+
+
+
 @api_bp.route('/rooms/<room_id>', methods=['GET'])
 @optional_auth
 def get_room(room_id):
@@ -208,11 +224,11 @@ def process_join_request(room_id, request_id):
 # Member routes
 @api_bp.route('/rooms/<room_id>/members', methods=['GET'])
 def list_members(room_id):
-    """List all members in a room."""
-    room = db_service.get_room(room_id)
-    if not room:
+    """List all members in a room (optimized direct query without full room deserialization)."""
+    members = db_service.list_room_members(room_id)
+    if members is None:
         return jsonify({'error': 'Room not found'}), 404
-    return jsonify({'members': room.get('members', [])}), 200
+    return jsonify({'members': members}), 200
 
 
 @api_bp.route('/rooms/<room_id>/members', methods=['POST'])

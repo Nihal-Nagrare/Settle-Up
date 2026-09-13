@@ -35,13 +35,15 @@ def create_app(config_class=None):
 
     # Initialize SQLAlchemy database
     db.init_app(app)
-    init_database(app)
+    if app.config.get('AUTO_INIT_DB', True):
+        init_database(app)
 
     # Register CLI command for explicit database initialization in production
     @app.cli.command("init-db")
     def init_db_command():
         """Initialize database tables and run non-destructive migrations."""
-        init_database(app)
+        app.config['AUTO_INIT_DB'] = True
+        init_database(app, force=True)
         print("Database initialized successfully.")
 
     # Apply Werkzeug ProxyFix for reverse proxies (handles HTTPS X-Forwarded-Proto and client IPs)
@@ -88,7 +90,7 @@ def create_app(config_class=None):
             )
             response.headers['Content-Security-Policy'] = csp
 
-        # 2. CORS Headers for API routes
+        # 2. CORS and Cache-Control Headers for dynamic API routes
         if request.path.startswith('/api/'):
             if 'Access-Control-Allow-Origin' not in response.headers:
                 response.headers['Access-Control-Allow-Origin'] = cors_origins
@@ -96,6 +98,12 @@ def create_app(config_class=None):
                 response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
             if 'Access-Control-Allow-Headers' not in response.headers:
                 response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Auth-Token, X-Member-Id'
+            
+            # Prevent stale HTTP caching of dynamic API data across browsers & proxies (unless endpoint configured explicit cache header)
+            if 'Cache-Control' not in response.headers:
+                response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+                response.headers['Pragma'] = 'no-cache'
+                response.headers['Expires'] = '0'
         return response
 
     # Register API Blueprint

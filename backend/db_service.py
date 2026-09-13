@@ -7,6 +7,7 @@ import os
 import json
 from datetime import datetime, timezone
 from sqlalchemy import or_, inspect, text
+from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.exc import OperationalError, ProgrammingError, IntegrityError
 from .models import db, User, Room, Group, GroupMember, Expense, ExpenseSplit, Settlement, JoinRequest, BalanceRecord, RoomInvitation, get_utc_now
 from .auth import parse_positive_finite_float, sanitize_str, validate_name, validate_email
@@ -28,7 +29,7 @@ def parse_date(date_str):
 _INITIALIZED_ENGINES = set()
 
 
-def init_database(app):
+def init_database(app, force=False):
     """
     Safely creates all database tables and applies non-destructive schema migrations.
     Idempotent, dialect-aware (PostgreSQL & SQLite), and safe for serverless startup.
@@ -37,8 +38,8 @@ def init_database(app):
     """
     global _INITIALIZED_ENGINES
 
-    # If auto-init is disabled in config/env (e.g. pre-migrated serverless production), skip
-    if not app.config.get('AUTO_INIT_DB', True):
+    # If auto-init is disabled in config/env (e.g. pre-migrated serverless production), skip unless forced
+    if not force and not app.config.get('AUTO_INIT_DB', True):
         return
 
     with app.app_context():
@@ -91,118 +92,126 @@ def init_database(app):
                     err_msg = str(e).lower()
                     if "already exists" in err_msg or "duplicate" in err_msg:
                         app.logger.info("Column already added by concurrent process: %s", e)
-                    else:
-                        raise
-
-        with db.engine.connect() as conn:
-            if 'rooms' in existing_tables:
+        # Fast-path check: If all tables exist and are up to date, skip redundant schema introspection roundtrips
+        schema_migrated = False
+        if existing_tables.issuperset({'rooms', 'members', 'expenses', 'settlements', 'join_requests', 'room_invitations'}):
+            try:
                 room_cols = {c['name'] for c in inspector.get_columns('rooms')}
-                if 'status' not in room_cols:
-                    _safe_add_column(conn, 'rooms', 'status', "VARCHAR(20) DEFAULT 'ACTIVE'")
-                if 'owner_id' not in room_cols:
-                    _safe_add_column(conn, 'rooms', 'owner_id', "VARCHAR(64)")
-                if 'completed_at' not in room_cols:
-                    _safe_add_column(conn, 'rooms', 'completed_at', dt_type)
-                if 'archived_at' not in room_cols:
-                    _safe_add_column(conn, 'rooms', 'archived_at', dt_type)
+                if 'archived_at' in room_cols and 'status' in room_cols:
+                    schema_migrated = True
+            except Exception:
+                schema_migrated = False
 
-            if 'members' in existing_tables:
-                member_cols = {c['name'] for c in inspector.get_columns('members')}
-                if 'role' not in member_cols:
-                    _safe_add_column(conn, 'members', 'role', "VARCHAR(20) DEFAULT 'MEMBER'")
-                if 'user_id' not in member_cols:
-                    _safe_add_column(conn, 'members', 'user_id', "VARCHAR(64)")
-                if 'joined_at' not in member_cols:
-                    _safe_add_column(conn, 'members', 'joined_at', dt_type)
+        if not schema_migrated:
+            with db.engine.connect() as conn:
+                if 'rooms' in existing_tables:
+                    room_cols = {c['name'] for c in inspector.get_columns('rooms')}
+                    if 'status' not in room_cols:
+                        _safe_add_column(conn, 'rooms', 'status', "VARCHAR(20) DEFAULT 'ACTIVE'")
+                    if 'owner_id' not in room_cols:
+                        _safe_add_column(conn, 'rooms', 'owner_id', "VARCHAR(64)")
+                    if 'completed_at' not in room_cols:
+                        _safe_add_column(conn, 'rooms', 'completed_at', dt_type)
+                    if 'archived_at' not in room_cols:
+                        _safe_add_column(conn, 'rooms', 'archived_at', dt_type)
 
-            if 'expenses' in existing_tables:
-                exp_cols = {c['name'] for c in inspector.get_columns('expenses')}
-                if 'created_at' not in exp_cols:
-                    _safe_add_column(conn, 'expenses', 'created_at', dt_type)
-                if 'updated_at' not in exp_cols:
-                    _safe_add_column(conn, 'expenses', 'updated_at', dt_type)
-                if 'split_type' not in exp_cols:
-                    _safe_add_column(conn, 'expenses', 'split_type', "VARCHAR(20) DEFAULT 'EQUAL'")
-                if 'splits_json' not in exp_cols:
-                    _safe_add_column(conn, 'expenses', 'splits_json', "TEXT DEFAULT '{}'")
-                if 'date' not in exp_cols:
-                    _safe_add_column(conn, 'expenses', 'date', "VARCHAR(20)")
-                if 'notes' not in exp_cols:
-                    _safe_add_column(conn, 'expenses', 'notes', "TEXT")
+                if 'members' in existing_tables:
+                    member_cols = {c['name'] for c in inspector.get_columns('members')}
+                    if 'role' not in member_cols:
+                        _safe_add_column(conn, 'members', 'role', "VARCHAR(20) DEFAULT 'MEMBER'")
+                    if 'user_id' not in member_cols:
+                        _safe_add_column(conn, 'members', 'user_id', "VARCHAR(64)")
+                    if 'joined_at' not in member_cols:
+                        _safe_add_column(conn, 'members', 'joined_at', dt_type)
 
-            if 'settlements' in existing_tables:
-                set_cols = {c['name'] for c in inspector.get_columns('settlements')}
-                if 'created_at' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'created_at', dt_type)
-                if 'updated_at' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'updated_at', dt_type)
-                if 'transaction_id' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'transaction_id', "VARCHAR(100)")
-                if 'upi_txn_id' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'upi_txn_id', "VARCHAR(100)")
-                if 'reference_note' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'reference_note', "TEXT")
-                if 'proof_image' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'proof_image', "TEXT")
-                if 'proof_filename' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'proof_filename', "VARCHAR(255)")
-                if 'proof_content_type' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'proof_content_type', "VARCHAR(100)")
-                if 'proof_size_bytes' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'proof_size_bytes', "INTEGER")
-                if 'proof_uploaded_at' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'proof_uploaded_at', dt_type)
-                if 'timestamp' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'timestamp', "VARCHAR(50)")
-                if 'submitted_at' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'submitted_at', dt_type)
-                if 'confirmed_at' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'confirmed_at', dt_type)
-                if 'confirmed_by' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'confirmed_by', "VARCHAR(64)")
-                if 'rejected_at' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'rejected_at', dt_type)
-                if 'rejection_reason' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'rejection_reason', "VARCHAR(255)")
-                if 'rejection_notes' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'rejection_notes', "TEXT")
-                if 'disputed_at' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'disputed_at', dt_type)
-                if 'dispute_notes' not in set_cols:
-                    _safe_add_column(conn, 'settlements', 'dispute_notes', "TEXT")
+                if 'expenses' in existing_tables:
+                    exp_cols = {c['name'] for c in inspector.get_columns('expenses')}
+                    if 'created_at' not in exp_cols:
+                        _safe_add_column(conn, 'expenses', 'created_at', dt_type)
+                    if 'updated_at' not in exp_cols:
+                        _safe_add_column(conn, 'expenses', 'updated_at', dt_type)
+                    if 'split_type' not in exp_cols:
+                        _safe_add_column(conn, 'expenses', 'split_type', "VARCHAR(20) DEFAULT 'EQUAL'")
+                    if 'splits_json' not in exp_cols:
+                        _safe_add_column(conn, 'expenses', 'splits_json', "TEXT DEFAULT '{}'")
+                    if 'date' not in exp_cols:
+                        _safe_add_column(conn, 'expenses', 'date', "VARCHAR(20)")
+                    if 'notes' not in exp_cols:
+                        _safe_add_column(conn, 'expenses', 'notes', "TEXT")
 
-            if 'join_requests' in existing_tables:
-                jr_cols = {c['name'] for c in inspector.get_columns('join_requests')}
-                if 'name' not in jr_cols:
-                    _safe_add_column(conn, 'join_requests', 'name', "VARCHAR(120)")
-                    if 'applicant_name' in jr_cols:
-                        conn.execute(text("UPDATE join_requests SET name = applicant_name WHERE name IS NULL"))
+                if 'settlements' in existing_tables:
+                    set_cols = {c['name'] for c in inspector.get_columns('settlements')}
+                    if 'created_at' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'created_at', dt_type)
+                    if 'updated_at' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'updated_at', dt_type)
+                    if 'transaction_id' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'transaction_id', "VARCHAR(100)")
+                    if 'upi_txn_id' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'upi_txn_id', "VARCHAR(100)")
+                    if 'reference_note' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'reference_note', "TEXT")
+                    if 'proof_image' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'proof_image', "TEXT")
+                    if 'proof_filename' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'proof_filename', "VARCHAR(255)")
+                    if 'proof_content_type' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'proof_content_type', "VARCHAR(100)")
+                    if 'proof_size_bytes' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'proof_size_bytes', "INTEGER")
+                    if 'proof_uploaded_at' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'proof_uploaded_at', dt_type)
+                    if 'timestamp' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'timestamp', "VARCHAR(50)")
+                    if 'submitted_at' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'submitted_at', dt_type)
+                    if 'confirmed_at' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'confirmed_at', dt_type)
+                    if 'confirmed_by' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'confirmed_by', "VARCHAR(64)")
+                    if 'rejected_at' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'rejected_at', dt_type)
+                    if 'rejection_reason' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'rejection_reason', "VARCHAR(255)")
+                    if 'rejection_notes' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'rejection_notes', "TEXT")
+                    if 'disputed_at' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'disputed_at', dt_type)
+                    if 'dispute_notes' not in set_cols:
+                        _safe_add_column(conn, 'settlements', 'dispute_notes', "TEXT")
 
-                if 'email' not in jr_cols:
-                    _safe_add_column(conn, 'join_requests', 'email', "VARCHAR(150)")
-                    if 'applicant_email' in jr_cols:
-                        conn.execute(text("UPDATE join_requests SET email = applicant_email WHERE email IS NULL"))
+                if 'join_requests' in existing_tables:
+                    jr_cols = {c['name'] for c in inspector.get_columns('join_requests')}
+                    if 'name' not in jr_cols:
+                        _safe_add_column(conn, 'join_requests', 'name', "VARCHAR(120)")
+                        if 'applicant_name' in jr_cols:
+                            conn.execute(text("UPDATE join_requests SET name = applicant_name WHERE name IS NULL"))
 
-                if 'phone' not in jr_cols:
-                    _safe_add_column(conn, 'join_requests', 'phone', "VARCHAR(50)")
-                    if 'applicant_phone' in jr_cols:
-                        conn.execute(text("UPDATE join_requests SET phone = applicant_phone WHERE phone IS NULL"))
+                    if 'email' not in jr_cols:
+                        _safe_add_column(conn, 'join_requests', 'email', "VARCHAR(150)")
+                        if 'applicant_email' in jr_cols:
+                            conn.execute(text("UPDATE join_requests SET email = applicant_email WHERE email IS NULL"))
 
-                if 'upi_id' not in jr_cols:
-                    _safe_add_column(conn, 'join_requests', 'upi_id', "VARCHAR(100)")
-                    if 'applicant_upi' in jr_cols:
-                        conn.execute(text("UPDATE join_requests SET upi_id = applicant_upi WHERE upi_id IS NULL"))
+                    if 'phone' not in jr_cols:
+                        _safe_add_column(conn, 'join_requests', 'phone', "VARCHAR(50)")
+                        if 'applicant_phone' in jr_cols:
+                            conn.execute(text("UPDATE join_requests SET phone = applicant_phone WHERE phone IS NULL"))
 
-            # Data cleanup for existing records: Ensure room owners and placeholder hosts have role='HOST'
-            if 'members' in existing_tables:
-                conn.execute(text("UPDATE members SET role = 'HOST' WHERE (role IS NULL OR role = 'MEMBER') AND (name = 'You (Host)' OR name LIKE '%(Host)%' OR id IN (SELECT owner_id FROM rooms WHERE owner_id IS NOT NULL))"))
-                if 'users' in existing_tables:
-                    conn.execute(text("UPDATE members SET user_id = (SELECT users.id FROM users WHERE LOWER(users.email) = LOWER(members.google_id) LIMIT 1) WHERE (user_id IS NULL OR user_id = '') AND google_id IS NOT NULL AND google_id != '' AND LOWER(google_id) IN (SELECT LOWER(email) FROM users)"))
-                    if 'rooms' in existing_tables:
-                        conn.execute(text("UPDATE rooms SET owner_id = (SELECT members.user_id FROM members WHERE members.id = rooms.owner_id AND members.user_id IS NOT NULL LIMIT 1) WHERE owner_id IS NOT NULL AND EXISTS (SELECT 1 FROM members WHERE members.id = rooms.owner_id AND members.user_id IS NOT NULL)"))
-                        conn.execute(text("UPDATE rooms SET owner_id = (SELECT members.user_id FROM members WHERE members.room_id = rooms.id AND members.user_id IS NOT NULL AND members.role = 'HOST' LIMIT 1) WHERE (owner_id IS NULL OR owner_id NOT LIKE 'usr_%') AND EXISTS (SELECT 1 FROM members WHERE members.room_id = rooms.id AND members.user_id IS NOT NULL AND members.role = 'HOST')"))
+                    if 'upi_id' not in jr_cols:
+                        _safe_add_column(conn, 'join_requests', 'upi_id', "VARCHAR(100)")
+                        if 'applicant_upi' in jr_cols:
+                            conn.execute(text("UPDATE join_requests SET upi_id = applicant_upi WHERE upi_id IS NULL"))
 
-            conn.commit()
+                # Data cleanup for existing records: Ensure room owners and placeholder hosts have role='HOST'
+                if 'members' in existing_tables:
+                    conn.execute(text("UPDATE members SET role = 'HOST' WHERE (role IS NULL OR role = 'MEMBER') AND (name = 'You (Host)' OR name LIKE '%(Host)%' OR id IN (SELECT owner_id FROM rooms WHERE owner_id IS NOT NULL))"))
+                    if 'users' in existing_tables:
+                        conn.execute(text("UPDATE members SET user_id = (SELECT users.id FROM users WHERE LOWER(users.email) = LOWER(members.google_id) LIMIT 1) WHERE (user_id IS NULL OR user_id = '') AND google_id IS NOT NULL AND google_id != '' AND LOWER(google_id) IN (SELECT LOWER(email) FROM users)"))
+                        if 'rooms' in existing_tables:
+                            conn.execute(text("UPDATE rooms SET owner_id = (SELECT members.user_id FROM members WHERE members.id = rooms.owner_id AND members.user_id IS NOT NULL LIMIT 1) WHERE owner_id IS NOT NULL AND EXISTS (SELECT 1 FROM members WHERE members.id = rooms.owner_id AND members.user_id IS NOT NULL)"))
+                            conn.execute(text("UPDATE rooms SET owner_id = (SELECT members.user_id FROM members WHERE members.room_id = rooms.id AND members.user_id IS NOT NULL AND members.role = 'HOST' LIMIT 1) WHERE (owner_id IS NULL OR owner_id NOT LIKE 'usr_%') AND EXISTS (SELECT 1 FROM members WHERE members.room_id = rooms.id AND members.user_id IS NOT NULL AND members.role = 'HOST')"))
+
+                conn.commit()
 
         # 3. Seed default sample trip if absent (skip in production unless explicitly requested)
         should_seed = not is_prod or os.getenv('SEED_SAMPLE_DATA', 'False').lower() in ('true', '1', 't')
@@ -387,7 +396,10 @@ def get_room(room_id, user=None):
     if not room_id:
         return None
     norm_id = room_id.upper()
-    room = db.session.get(Room, norm_id)
+    room = Room.query.options(
+        selectinload(Room.expenses),
+        selectinload(Room.settlements)
+    ).filter_by(id=norm_id).first()
     if not room and norm_id == 'GOA2026':
         return seed_sample_room('GOA2026')
     if not room:
@@ -879,7 +891,77 @@ def update_room_currency(room_id, currency):
     return room.to_dict()
 
 
+def get_room_sync_state(room_id, user_id=None):
+    """
+    Ultra-lightweight state snapshot for background real-time synchronization.
+    Executes a single fast indexed SQL query (<10ms) without loading ORM entities
+    or large collections (expenses, settlements, etc.).
+    """
+    if not room_id:
+        return None
+    norm_id = room_id.upper()
+
+    if user_id:
+        stmt = text("""
+            SELECT 
+                r.id,
+                r.status,
+                r.updated_at,
+                (SELECT COUNT(*) FROM join_requests jr WHERE jr.room_id = r.id AND jr.status = 'PENDING') AS pending_requests,
+                (SELECT COUNT(*) FROM room_invitations ri WHERE ri.invitee_id = :user_id AND ri.status = 'PENDING') AS pending_invitations,
+                (SELECT COUNT(*) FROM members m WHERE m.room_id = r.id) AS members_count
+            FROM rooms r
+            WHERE r.id = :room_id
+        """)
+        params = {'room_id': norm_id, 'user_id': str(user_id)}
+    else:
+        stmt = text("""
+            SELECT 
+                r.id,
+                r.status,
+                r.updated_at,
+                (SELECT COUNT(*) FROM join_requests jr WHERE jr.room_id = r.id AND jr.status = 'PENDING') AS pending_requests,
+                (SELECT COUNT(*) FROM room_invitations ri WHERE ri.room_id = r.id AND ri.status = 'PENDING') AS pending_invitations,
+                (SELECT COUNT(*) FROM members m WHERE m.room_id = r.id) AS members_count
+            FROM rooms r
+            WHERE r.id = :room_id
+        """)
+        params = {'room_id': norm_id}
+
+    row = db.session.execute(stmt, params).fetchone()
+    if not row:
+        return None
+
+    r_id, r_status, r_updated_at, pending_reqs, pending_invs, members_count = row
+
+    updated_at_str = None
+    if r_updated_at:
+        if hasattr(r_updated_at, 'isoformat'):
+            updated_at_str = r_updated_at.isoformat()
+        else:
+            updated_at_str = str(r_updated_at)
+
+    return {
+        'id': r_id,
+        'status': r_status,
+        'updatedAt': updated_at_str,
+        'pendingRequestsCount': int(pending_reqs or 0),
+        'pendingInvitationsCount': int(pending_invs or 0),
+        'membersCount': int(members_count or 0)
+    }
+
+
 # Member Operations
+def list_room_members(room_id):
+    """Directly lists members of a room without full room entity loading."""
+    norm_id = (room_id or '').upper()
+    room_exists = db.session.query(Room.id).filter_by(id=norm_id).first()
+    if not room_exists:
+        return None
+    members = GroupMember.query.filter_by(room_id=norm_id).all()
+    return [m.to_dict() for m in members]
+
+
 def add_member(room_id, member_data):
     norm_id = (room_id or '').upper()
     room = db.session.get(Room, norm_id)
