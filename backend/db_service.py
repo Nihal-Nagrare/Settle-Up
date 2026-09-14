@@ -1439,7 +1439,7 @@ def upload_settlement_proof(room_id, settlement_id, file_storage=None, file_byte
     return room.to_dict(), True, "Payment proof uploaded successfully. Awaiting creditor confirmation.", s.to_dict()
 
 
-def update_settlement(room_id, settlement_id, update_data, user=None):
+def update_settlement(room_id, settlement_id, update_data, user=None, include_room=True):
     """
     Updates a settlement record with strict authorization checks:
     - Debtor CANNOT confirm or reject their own payment.
@@ -1447,21 +1447,32 @@ def update_settlement(room_id, settlement_id, update_data, user=None):
     - Updates audit timestamps (confirmed_at, rejected_at, disputed_at, updated_at).
     """
     norm_id = (room_id or '').upper()
-    s = Settlement.query.filter_by(id=settlement_id, room_id=norm_id).first()
+    s = Settlement.query.options(joinedload(Settlement.room)).filter_by(id=settlement_id, room_id=norm_id).first()
     if not s:
         return None, False, "Settlement not found", None
 
     room = s.room
+    if not room:
+        room = db.session.get(Room, norm_id)
+    if not room:
+        return None, False, "Room not found", None
+
     if room.status in ('COMPLETED', 'DISCARDED'):
-        return room.to_dict(), False, "Cannot modify settlements in a completed or archived room.", None
+        room_dict = room.to_dict() if include_room else None
+        return room_dict, False, "Cannot modify settlements in a completed or archived room.", None
 
     now = get_utc_now()
     new_status = (update_data.get('status') or '').upper() if 'status' in update_data else None
     actor_member_id = update_data.get('actorMemberId') or update_data.get('confirmedByMemberId')
 
-    # Resolve receiver member details
-    to_member = GroupMember.query.filter_by(id=s.to_member_id, room_id=norm_id).first()
-    from_member = GroupMember.query.filter_by(id=s.from_member_id, room_id=norm_id).first()
+    # Resolve receiver and debtor member details from already-loaded room.members (fallback to query if needed)
+    to_member = next((m for m in room.members if m.id == s.to_member_id), None)
+    if not to_member:
+        to_member = GroupMember.query.filter_by(id=s.to_member_id, room_id=norm_id).first()
+
+    from_member = next((m for m in room.members if m.id == s.from_member_id), None)
+    if not from_member:
+        from_member = GroupMember.query.filter_by(id=s.from_member_id, room_id=norm_id).first()
 
     # Determine if actor is debtor vs receiver vs admin
     is_debtor_actor = actor_member_id and actor_member_id == s.from_member_id
@@ -1472,7 +1483,8 @@ def update_settlement(room_id, settlement_id, update_data, user=None):
     # 1. State transition to CONFIRMED / SETTLED
     if new_status in ('CONFIRMED', 'SETTLED'):
         if is_debtor_actor:
-            return room.to_dict(), False, "Debtor cannot confirm their own payment. Only the creditor or room admin can confirm.", None
+            room_dict = room.to_dict() if include_room else None
+            return room_dict, False, "Debtor cannot confirm their own payment. Only the creditor or room admin can confirm.", None
 
         s.status = 'CONFIRMED'
         s.confirmed_at = now
@@ -1486,7 +1498,8 @@ def update_settlement(room_id, settlement_id, update_data, user=None):
     # 2. State transition to REJECTED
     elif new_status == 'REJECTED':
         if is_debtor_actor:
-            return room.to_dict(), False, "Debtor cannot reject payment claims. Only the creditor or room admin can reject.", None
+            room_dict = room.to_dict() if include_room else None
+            return room_dict, False, "Debtor cannot reject payment claims. Only the creditor or room admin can reject.", None
 
         s.status = 'REJECTED'
         s.rejected_at = now
@@ -1540,18 +1553,23 @@ def update_settlement(room_id, settlement_id, update_data, user=None):
 
     s.updated_at = now
     s.room.updated_at = now
+    # Take dict snapshot BEFORE commit while objects are attached and in memory (avoids expired reload query)
+    s_dict = s.to_dict()
     db.session.commit()
-    return s.room.to_dict(), True, "Settlement updated successfully", s.to_dict()
+
+    if include_room:
+        return room.to_dict(), True, "Settlement updated successfully", s_dict
+    return None, True, "Settlement updated successfully", s_dict
 
 
-def confirm_settlement(room_id, settlement_id, actor_member_id=None, user=None, confirmed_by=None):
+def confirm_settlement(room_id, settlement_id, actor_member_id=None, user=None, confirmed_by=None, include_room=False):
     """Dedicated action to confirm a settlement by the creditor."""
     update_data = {
         'status': 'CONFIRMED',
         'actorMemberId': actor_member_id,
         'confirmedBy': confirmed_by
     }
-    return update_settlement(room_id, settlement_id, update_data, user=user)
+    return update_settlement(room_id, settlement_id, update_data, user=user, include_room=include_room)
 
 
 def reject_settlement(room_id, settlement_id, actor_member_id=None, user=None, reason=None, notes=None):

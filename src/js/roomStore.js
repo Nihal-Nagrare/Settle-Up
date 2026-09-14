@@ -865,8 +865,10 @@ export async function apiConfirmSettlement(roomId, settlementId, { actorMemberId
     method: 'POST',
     body: JSON.stringify({ actorMemberId, confirmedBy })
   });
-  if (res.ok && res.data && res.data.room) {
-    saveToLocalCache(res.data.room);
+  if (res.ok && res.data && (res.data.settlement || res.data.room)) {
+    if (res.data.room) {
+      saveToLocalCache(res.data.room);
+    }
     return { success: true, room: res.data.room, settlement: res.data.settlement, message: res.data.message };
   }
   return { success: false, error: res.error || 'Failed to confirm settlement' };

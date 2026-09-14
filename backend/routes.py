@@ -529,13 +529,14 @@ def confirm_settlement_action(room_id, settlement_id):
     user = getattr(request, 'current_user', None)
     actor_member_id = data.get('actorMemberId') or data.get('confirmedByMemberId')
     confirmed_by = data.get('confirmedBy')
+    include_room = request.args.get('include_room', '').lower() in ('true', '1') or data.get('includeRoom') is True
 
     updated_room, success, msg, s_dict = db_service.confirm_settlement(
-        room_id, settlement_id, actor_member_id=actor_member_id, user=user, confirmed_by=confirmed_by
+        room_id, settlement_id, actor_member_id=actor_member_id, user=user, confirmed_by=confirmed_by, include_room=include_room
     )
-    if not updated_room and not success:
-        return jsonify({'error': msg or 'Settlement not found'}), 404
     if not success:
+        if msg and 'not found' in msg.lower():
+            return jsonify({'error': msg}), 404
         status_code = 403 if ('cannot' in msg.lower() or 'unauthorized' in msg.lower()) else 400
         return jsonify({'error': msg}), status_code
     return jsonify({'room': updated_room, 'settlement': s_dict, 'message': 'Settlement confirmed successfully'}), 200

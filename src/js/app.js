@@ -1656,11 +1656,15 @@ export async function confirmReceiverSettlementAction() {
   } else if (!res.success && res.error) {
     alert(res.error);
     return;
-  } else {
-    set.status = 'CONFIRMED';
-    set.confirmedAt = new Date().toISOString();
-    set.confirmedBy = confirmedBy;
-    await saveRoomAsync(currentRoom);
+  } else if (res.success) {
+    if (res.settlement) {
+      Object.assign(set, res.settlement);
+    } else {
+      set.status = 'CONFIRMED';
+      set.confirmedAt = new Date().toISOString();
+      set.confirmedBy = confirmedBy;
+    }
+    saveToLocalCache(currentRoom);
   }
 
   closeModal('review-settlement-modal');
